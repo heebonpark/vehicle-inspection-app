@@ -144,9 +144,25 @@ def _na_result_drawing(width=90, height=14):
     """'해당없음' 항목은 원본 양식처럼 결과란에 대각선을 그어 표시한다."""
     d = Drawing(width, height)
     d.add(String(width / 2, height / 2 - 2.5, "해당없음", fontName=FONT_NAME, fontSize=7.5,
-                 textAnchor="middle", fillColor=colors.grey))
+                 textAnchor="middle", fillColor=colors.Color(0.35, 0.35, 0.35)))
     d.add(Line(3, 3, width - 3, height - 3, strokeColor=colors.black, strokeWidth=0.9))
     return d
+
+
+def _measure_height(flowable, avail_width):
+    if isinstance(flowable, Spacer):
+        return flowable.height
+    return flowable.wrap(avail_width, 20000)[1]
+
+
+def _balance_top_spacer(flowables, avail_width, avail_height):
+    """콘텐츠가 페이지 하단에 큰 공백을 남기고 위쪽에 붙어버리는 것을 막기 위해,
+    실제 콘텐츠 높이를 측정해 남는 공간의 절반을 상단 여백으로 얹어 위/아래
+    여백 비율을 맞춘다."""
+    content_height = sum(_measure_height(f, avail_width) for f in flowables)
+    leftover = avail_height - content_height
+    top_pad = max(leftover, 0) / 2
+    return Spacer(1, top_pad)
 
 
 @st.cache_data(show_spinner=False)
@@ -215,6 +231,7 @@ def generate_integrated_excel(row_data):
         diagonal=Side(style='thin', color='999999'),
         diagonalUp=True,
     )
+    na_fill = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
 
     check_dict = json.loads(row_data.get("check_data", "{}"))
     cur_r = 6
@@ -228,17 +245,19 @@ def generate_integrated_excel(row_data):
             ws1.cell(row=cur_r, column=2, value=sub_cat).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             ws1.cell(row=cur_r, column=3, value=f"ㅇ {desc}").alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-            # 결과 표시 (적정 / 정비필요 / 해당없음 - 대상이 아닌 항목은 대각선으로 표시)
+            # 결과 표시 (적정 / 정비필요 / 해당없음 - 대상이 아닌 항목은 연한 회색 음영 + 대각선으로 표시)
             res_val = check_dict.get(key, "적정")
+            is_na = key != "item_km" and res_val == "해당없음"
             result_cell = ws1.cell(row=cur_r, column=4)
             if key == "item_km":
                 result_cell.value = f"km : {row_data.get('accumulated_km', '')}"
                 result_cell.border = thin_border
                 result_cell.font = Font(name="맑은 고딕", size=10)
-            elif res_val == "해당없음":
+            elif is_na:
                 result_cell.value = "해당없음"
                 result_cell.border = na_border
-                result_cell.font = Font(name="맑은 고딕", size=9, color="999999", italic=True)
+                result_cell.font = Font(name="맑은 고딕", size=9, color="595959", italic=True)
+                result_cell.fill = na_fill
             else:
                 result_cell.value = "■ 적정   □ 정비필요" if res_val == "적정" else "□ 적정   ■ 정비필요"
                 result_cell.border = thin_border
@@ -246,8 +265,11 @@ def generate_integrated_excel(row_data):
             result_cell.alignment = Alignment(horizontal="center", vertical="center")
 
             for c in range(1, 4):
-                ws1.cell(row=cur_r, column=c).border = thin_border
-                ws1.cell(row=cur_r, column=c).font = Font(name="맑은 고딕", size=10)
+                cell = ws1.cell(row=cur_r, column=c)
+                cell.border = thin_border
+                cell.font = Font(name="맑은 고딕", size=10)
+                if is_na and c >= 2:
+                    cell.fill = na_fill
             ws1.row_dimensions[cur_r].height = 32
 
             # 같은 세부항목(핸들/타이어/블루투스이어폰 등)이 연속되면 하나로 병합
@@ -341,7 +363,7 @@ def generate_integrated_pdf(row_data):
     tbl_font_center = ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8.5, leading=12.5, alignment=1)
 
     # === [PAGE 1: 이륜차량 안전관리 상태 평가] ===
-    elements.append(Paragraph("이륜차량 안전관리 상태 평가", title_style))
+    title1 = Paragraph("이륜차량 안전관리 상태 평가", title_style)
 
     meta_p1 = Table([[
         Paragraph(f"● 본부명 : {row_data['hq_name']}", meta_style),
@@ -349,8 +371,6 @@ def generate_integrated_pdf(row_data):
         Paragraph(f"● 차량번호 : {row_data['car_no']}", meta_style)
     ]], colWidths=[180, 160, 195])
     meta_p1.setStyle(TableStyle([('BOTTOMPADDING', (0,0), (-1,-1), 8)]))
-    elements.append(meta_p1)
-    elements.append(Spacer(1, 8))
 
     table_data = [
         [
@@ -363,6 +383,7 @@ def generate_integrated_pdf(row_data):
 
     check_dict = json.loads(row_data.get("check_data", "{}"))
     spans = [('SPAN', (1, 0), (2, 0))]
+    na_row_styles = []
     cur_idx = 1
 
     for sec in CHECKLIST_SECTIONS:
@@ -370,13 +391,17 @@ def generate_integrated_pdf(row_data):
         items = sec["items"]
         for i, (sub_cat, desc, key) in enumerate(items):
             res_val = check_dict.get(key, "적정")
+            is_na = key != "item_km" and res_val == "해당없음"
             if key == "item_km":
                 res_cell = Paragraph(f"km : {row_data.get('accumulated_km', '')}", tbl_font_center)
-            elif res_val == "해당없음":
+            elif is_na:
                 res_cell = _na_result_drawing()
             else:
                 res_txt = "■ 적정  □ 정비필요" if res_val == "적정" else "□ 적정  ■ 정비필요"
                 res_cell = Paragraph(res_txt, tbl_font_center)
+
+            if is_na:
+                na_row_styles.append(('BACKGROUND', (1, cur_idx), (3, cur_idx), colors.Color(0.94, 0.94, 0.94)))
 
             table_data.append([
                 Paragraph(f"<b>{sec['category']}</b>", tbl_font_center),
@@ -409,9 +434,7 @@ def generate_integrated_pdf(row_data):
         ('BOTTOMPADDING', (0,0), (-1,-1), 5),
         ('LEFTPADDING', (0,0), (-1,-1), 5),
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
-    ] + spans))
-    elements.append(p1_table)
-    elements.append(Spacer(1, 12))
+    ] + spans + na_row_styles))
 
     sign_data = [
         ["", Paragraph(f"점검일시 : &nbsp;&nbsp;&nbsp;&nbsp; {row_data.get('inspect_date', '')}", meta_style)],
@@ -423,13 +446,15 @@ def generate_integrated_pdf(row_data):
         ('TOPPADDING', (0,0), (-1,-1), 2),
         ('BOTTOMPADDING', (0,0), (-1,-1), 2)
     ]))
-    elements.append(sign_table)
+
+    # 위/아래 여백 비율을 맞추기 위해 실제 콘텐츠 높이를 측정해 상단에 여백을 배분한다.
+    page1_flowables = [title1, meta_p1, Spacer(1, 8), p1_table, Spacer(1, 12), sign_table]
+    elements.append(_balance_top_spacer(page1_flowables, doc.width, doc.height))
+    elements.extend(page1_flowables)
 
     # === [PAGE 2: 기술/업무용 차량 안전관리 상태 평가 (4면 사진)] ===
     elements.append(PageBreak())
-    elements.append(Paragraph("기술/업무용 차량 안전관리 상태 평가", title_style))
-    elements.append(meta_p1)
-    elements.append(Spacer(1, 10))
+    title2 = Paragraph("기술/업무용 차량 안전관리 상태 평가", title_style)
 
     def make_rl_img(b):
         if b:
@@ -462,7 +487,10 @@ def generate_integrated_pdf(row_data):
         ('TOPPADDING', (0,2), (1,2), 6),
         ('BOTTOMPADDING', (0,2), (1,2), 6),
     ]))
-    elements.append(p2_table)
+
+    page2_flowables = [title2, meta_p1, Spacer(1, 10), p2_table]
+    elements.append(_balance_top_spacer(page2_flowables, doc.width, doc.height))
+    elements.extend(page2_flowables)
 
     doc.build(elements)
     buffer.seek(0)

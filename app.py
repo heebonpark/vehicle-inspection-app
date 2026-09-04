@@ -14,6 +14,10 @@ HQ_NAME = "강북/강원본부"
 BRANCHES = ["중앙지사", "강북지사", "서대문지사", "고양지사", "의정부지사", "남양주지사", "강릉지사", "원주지사", "춘천고객지원팀"]
 DIRECT_INPUT_LABEL = "-- 직접 입력 --"
 
+# 블루투스이어폰 관련 2개 항목은 현재 지급 대상이 아니라 현장에서 입력받지 않고
+# 항상 '해당없음'으로 고정한다 (보고서에는 회색 음영 + 대각선으로 계속 표시됨).
+FORCED_NA_KEYS = {"item_etc_3", "item_etc_4"}
+
 
 def force_rear_camera():
     """st.camera_input은 후면/전면 카메라를 지정하는 기능이 없어(전면이 기본으로
@@ -208,6 +212,13 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
                         st.write(f"**{sub_cat}** : {desc}")
                     with col_k2:
                         st.write(f"km : {km_in}" if km_in else "km : (상단에 입력)")
+                elif key in FORCED_NA_KEYS:
+                    col_t, col_r = st.columns([3.2, 1.2])
+                    with col_t:
+                        st.write(f"**[{sub_cat}]** {desc}")
+                    with col_r:
+                        st.caption("해당없음 (등록 불필요)")
+                    collected_checks[key] = "해당없음"
                 else:
                     col_t, col_r = st.columns([3.2, 1.2])
                     with col_t:
