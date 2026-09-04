@@ -44,3 +44,13 @@ def init_db():
                 car_no TEXT UNIQUE
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                role TEXT,
+                branch TEXT,
+                salt TEXT,
+                pw_hash TEXT
+            )
+        """)

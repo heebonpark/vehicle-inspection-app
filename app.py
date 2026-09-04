@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import hashlib
 import hmac
+import os
 import sqlite3
 from datetime import datetime
 
@@ -10,8 +11,24 @@ from app.core.handlers import CHECKLIST_SECTIONS, generate_integrated_excel, gen
 from app.ui.styles import apply_custom_styles
 
 HQ_NAME = "강북/강원본부"
-BRANCHES = ["중앙지사", "강북지사", "서대문지사", "동대문지사", "기타지사"]
+BRANCHES = ["중앙지사", "강북지사", "서대문지사", "고양지사", "의정부지사", "남양주지사", "강릉지사", "원주지사", "춘천고객지원팀"]
 DIRECT_INPUT_LABEL = "-- 직접 입력 --"
+
+# 최초 1회(DB에 계정이 하나도 없을 때)만 자동 생성되는 기본 계정. 이후 비밀번호는
+# DB(users 테이블)에 저장되며 로그인 후 화면에서 변경 가능하다.
+DEFAULT_PASSWORD = "admin1234"
+DEFAULT_ACCOUNTS = [
+    {"id": "hq_admin", "name": "본부 총괄관리자", "role": "본부", "branch": "전체"},
+    {"id": "jungang_mgr", "name": "중앙지사 관리자", "role": "지사", "branch": "중앙지사"},
+    {"id": "gangbuk_mgr", "name": "강북지사 관리자", "role": "지사", "branch": "강북지사"},
+    {"id": "seodaemun_mgr", "name": "서대문지사 관리자", "role": "지사", "branch": "서대문지사"},
+    {"id": "goyang_mgr", "name": "고양지사 관리자", "role": "지사", "branch": "고양지사"},
+    {"id": "uijeongbu_mgr", "name": "의정부지사 관리자", "role": "지사", "branch": "의정부지사"},
+    {"id": "namyangju_mgr", "name": "남양주지사 관리자", "role": "지사", "branch": "남양주지사"},
+    {"id": "gangneung_mgr", "name": "강릉지사 관리자", "role": "지사", "branch": "강릉지사"},
+    {"id": "wonju_mgr", "name": "원주지사 관리자", "role": "지사", "branch": "원주지사"},
+    {"id": "chuncheon_mgr", "name": "춘천고객지원팀 관리자", "role": "지사", "branch": "춘천고객지원팀"},
+]
 
 # --- 1. 페이지 설정 및 폰트/스타일 세팅 ---
 st.set_page_config(page_title="이륜/업무용 차량 안전관리 종합시스템", layout="wide", initial_sidebar_state="expanded")
@@ -20,40 +37,62 @@ apply_custom_styles()
 # DB 초기화
 init_db()
 
-# --- 2. 로그인 및 권한 관리 ---
-# 비밀번호는 평문으로 저장하지 않고 PBKDF2-SHA256(salt+hash)로 저장한다.
-USERS = {
-    "hq_admin": {
-        "salt": "158c58196d1a8f03011df3ce8969954b",
-        "pw_hash": "0678fc7d58594e0598b3ef0d577c4711c638e1ae123f0fbfc58d02cc181a27bf",
-        "name": "본부 총괄관리자", "role": "본부", "branch": "전체",
-    },
-    "jungang_mgr": {
-        "salt": "cd6df512e7e9c0c8bd9879e1adb1da89",
-        "pw_hash": "508bbd55196dddc5b143b30138a0b1046ce8473761b60e9b8f3a47bec68e93b3",
-        "name": "중앙지사 관리자", "role": "지사", "branch": "중앙지사",
-    },
-    "gangbuk_mgr": {
-        "salt": "eecba65f5c92937d350e16ff69e7350d",
-        "pw_hash": "b46d21fcbfee363e6067e00266588d7d142121fd838d45ce4493915a9f9267b7",
-        "name": "강북지사 관리자", "role": "지사", "branch": "강북지사",
-    },
-    "seodaemun_mgr": {
-        "salt": "f28f9d2db8c8731f56e21afb2aaa8a46",
-        "pw_hash": "a16c4ca30c6bd802ff6234ac12c4e2a25bd73d973a6a33a15fd46a7fc79469fd",
-        "name": "서대문지사 관리자", "role": "지사", "branch": "서대문지사",
-    },
-}
+
+def _hash_password(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000).hex()
+
+
+def seed_default_users():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM users")
+        if c.fetchone()[0] == 0:
+            for acc in DEFAULT_ACCOUNTS:
+                salt = os.urandom(16)
+                conn.execute(
+                    "INSERT INTO users (id, name, role, branch, salt, pw_hash) VALUES (?, ?, ?, ?, ?, ?)",
+                    (acc["id"], acc["name"], acc["role"], acc["branch"], salt.hex(), _hash_password(DEFAULT_PASSWORD, salt))
+                )
+
+
+seed_default_users()
+
+
+def list_users():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, name, role, branch FROM users ORDER BY (role != '본부'), branch")
+        return c.fetchall()
+
+
+def get_user(user_id: str):
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, name, role, branch, salt, pw_hash FROM users WHERE id = ?", (user_id,))
+        row = c.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "name": row[1], "role": row[2], "branch": row[3], "salt": row[4], "pw_hash": row[5]}
 
 
 def verify_password(user_id: str, password: str) -> bool:
-    user = USERS.get(user_id)
+    user = get_user(user_id)
     if not user:
         return False
-    salt = bytes.fromhex(user["salt"])
-    computed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000).hex()
+    computed = _hash_password(password, bytes.fromhex(user["salt"]))
     return hmac.compare_digest(computed, user["pw_hash"])
 
+
+def set_password(user_id: str, new_password: str):
+    salt = os.urandom(16)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET salt = ?, pw_hash = ? WHERE id = ?",
+            (salt.hex(), _hash_password(new_password, salt), user_id)
+        )
+
+
+# --- 2. 로그인 및 권한 관리 ---
 if "auth_user" not in st.session_state:
     st.session_state.auth_user = None
 
@@ -69,14 +108,22 @@ if st.session_state.auth_user:
         st.rerun()
 else:
     with st.sidebar.expander("관리자 로그인", expanded=not is_upload_mode):
-        lid = st.text_input("아이디")
-        lpw = st.text_input("비밀번호", type="password")
+        login_accounts = list_users()
+        login_id = st.selectbox(
+            "계정 선택", options=[a[0] for a in login_accounts],
+            format_func=lambda uid: next(f"{a[1]} ({a[3]})" for a in login_accounts if a[0] == uid),
+            key="login_id_select"
+        )
+        lpw = st.text_input("비밀번호", type="password", key="login_pw_input")
         if st.button("로그인", use_container_width=True):
-            if verify_password(lid, lpw):
-                st.session_state.auth_user = USERS[lid]
+            if verify_password(login_id, lpw):
+                user = get_user(login_id)
+                user.pop("salt", None)
+                user.pop("pw_hash", None)
+                st.session_state.auth_user = user
                 st.rerun()
             else:
-                st.error("계정 정보를 확인해 주세요.")
+                st.error("비밀번호가 일치하지 않습니다.")
 
 menu = ["현장 점검 등록 (체크리스트 + 4면촬영)"]
 if st.session_state.auth_user:
@@ -188,6 +235,50 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
 elif active_menu == "관리자 종합 조회/출력":
     u = st.session_state.auth_user
     st.title(f"차량 안전관리 상태 종합 대장 ({u['role']}: {u['name']})")
+
+    with st.expander("🔑 비밀번호 변경", expanded=False):
+        st.caption(f"현재 계정: {u['name']} ({u['id']})")
+        pc1, pc2, pc3 = st.columns(3)
+        with pc1:
+            pw_cur = st.text_input("현재 비밀번호", type="password", key="pw_cur")
+        with pc2:
+            pw_new = st.text_input("새 비밀번호", type="password", key="pw_new")
+        with pc3:
+            pw_new2 = st.text_input("새 비밀번호 확인", type="password", key="pw_new2")
+        if st.button("비밀번호 변경", key="pw_change_btn"):
+            if not verify_password(u["id"], pw_cur):
+                st.error("현재 비밀번호가 일치하지 않습니다.")
+            elif len(pw_new) < 4:
+                st.error("새 비밀번호는 4자 이상이어야 합니다.")
+            elif pw_new != pw_new2:
+                st.error("새 비밀번호가 서로 일치하지 않습니다.")
+            else:
+                set_password(u["id"], pw_new)
+                st.success("비밀번호가 변경되었습니다. 다음 로그인부터 새 비밀번호를 사용하세요.")
+
+        if u["role"] == "본부":
+            st.divider()
+            st.caption("본부 관리자는 다른 계정의 비밀번호를 초기화할 수 있습니다.")
+            all_accounts = list_users()
+            reset_targets = [a for a in all_accounts if a[0] != u["id"]]
+            rc1, rc2, rc3 = st.columns(3)
+            with rc1:
+                reset_target_id = st.selectbox(
+                    "대상 계정", options=[a[0] for a in reset_targets],
+                    format_func=lambda uid: next(f"{a[1]} ({a[3]})" for a in reset_targets if a[0] == uid),
+                    key="pw_reset_target"
+                )
+            with rc2:
+                pw_reset_new = st.text_input("새 비밀번호 지정", type="password", key="pw_reset_new")
+            with rc3:
+                st.write("")
+                st.write("")
+                if st.button("초기화", key="pw_reset_btn", use_container_width=True):
+                    if len(pw_reset_new) < 4:
+                        st.error("새 비밀번호는 4자 이상이어야 합니다.")
+                    else:
+                        set_password(reset_target_id, pw_reset_new)
+                        st.success("초기화 완료.")
 
     with st.expander("🚗 차량 등록 관리 (현장 등록 화면 드롭다운 목록)", expanded=False):
         veh_branch_options = BRANCHES if u["role"] == "본부" else [u["branch"]]
