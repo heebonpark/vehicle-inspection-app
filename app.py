@@ -168,7 +168,7 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
 
     # [파트 1: 이륜차량 점검표]
     st.subheader("1. 이륜차량 안전관리 점검표")
-    st.caption("기본값은 '적정'으로 설정되어 있습니다. 이상이 있는 항목만 '정비필요'로 변경하세요.")
+    st.caption("기본값은 '적정'으로 설정되어 있습니다. 이상이 있는 항목만 '정비필요'로, 해당 차량에 없는 항목(예: 블루투스이어폰 미지급)은 '해당없음'으로 변경하세요.")
 
     collected_checks = {}
 
@@ -186,7 +186,7 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
                     with col_t:
                         st.write(f"**[{sub_cat}]** {desc}")
                     with col_r:
-                        ans = st.radio("상태", ["적정", "정비필요"], horizontal=True, key=f"r_{key}", label_visibility="collapsed")
+                        ans = st.radio("상태", ["적정", "정비필요", "해당없음"], horizontal=True, key=f"r_{key}", label_visibility="collapsed")
                         collected_checks[key] = ans
 
     st.divider()

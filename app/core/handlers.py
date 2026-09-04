@@ -29,6 +29,7 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
+from reportlab.graphics.shapes import Drawing, Line, String
 
 # 한글 폰트는 배포 서버(OS)에 따라 설치 여부가 달라 시스템 폰트에 의존하면
 # 서버에서 글자가 깨진다(□□□). 리포지토리에 폰트 파일을 직접 포함해 어떤
@@ -136,6 +137,15 @@ def _fit_image(raw_bytes, box_w, box_h):
     return canvas
 
 
+def _na_result_drawing(width=90, height=14):
+    """'해당없음' 항목은 원본 양식처럼 결과란에 대각선을 그어 표시한다."""
+    d = Drawing(width, height)
+    d.add(String(width / 2, height / 2 - 2.5, "해당없음", fontName=FONT_NAME, fontSize=7.5,
+                 textAnchor="middle", fillColor=colors.grey))
+    d.add(Line(3, 3, width - 3, height - 3, strokeColor=colors.black, strokeWidth=0.9))
+    return d
+
+
 @st.cache_data(show_spinner=False)
 def generate_integrated_excel(row_data):
     wb = Workbook()
@@ -196,31 +206,58 @@ def generate_integrated_excel(row_data):
         ws1[col_l].border = thin_border
     ws1.row_dimensions[5].height = 24
 
+    na_border = Border(
+        left=Side(style='thin', color='000000'),
+        right=Side(style='thin', color='000000'),
+        top=Side(style='thin', color='000000'),
+        bottom=Side(style='thin', color='000000'),
+        diagonal=Side(style='thin', color='999999'),
+        diagonalUp=True,
+    )
+
     check_dict = json.loads(row_data.get("check_data", "{}"))
     cur_r = 6
-    
+
     for sec in CHECKLIST_SECTIONS:
         sec_start = cur_r
         cat_name = sec["category"]
-        for sub_cat, desc, key in sec["items"]:
+        items = sec["items"]
+        sub_run_start = cur_r
+        for i, (sub_cat, desc, key) in enumerate(items):
             ws1.cell(row=cur_r, column=2, value=sub_cat).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             ws1.cell(row=cur_r, column=3, value=f"ㅇ {desc}").alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-            
-            # 결과 표시
+
+            # 결과 표시 (적정 / 정비필요 / 해당없음 - 대상이 아닌 항목은 대각선으로 표시)
             res_val = check_dict.get(key, "적정")
+            result_cell = ws1.cell(row=cur_r, column=4)
             if key == "item_km":
-                res_cell_val = f"km : {row_data.get('accumulated_km', '')}"
+                result_cell.value = f"km : {row_data.get('accumulated_km', '')}"
+                result_cell.border = thin_border
+                result_cell.font = Font(name="맑은 고딕", size=10)
+            elif res_val == "해당없음":
+                result_cell.value = "해당없음"
+                result_cell.border = na_border
+                result_cell.font = Font(name="맑은 고딕", size=9, color="999999", italic=True)
             else:
-                res_cell_val = "■ 적정   □ 정비필요" if res_val == "적정" else "□ 적정   ■ 정비필요"
-            
-            ws1.cell(row=cur_r, column=4, value=res_cell_val).alignment = Alignment(horizontal="center", vertical="center")
-            
-            for c in range(1, 5):
+                result_cell.value = "■ 적정   □ 정비필요" if res_val == "적정" else "□ 적정   ■ 정비필요"
+                result_cell.border = thin_border
+                result_cell.font = Font(name="맑은 고딕", size=10)
+            result_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            for c in range(1, 4):
                 ws1.cell(row=cur_r, column=c).border = thin_border
                 ws1.cell(row=cur_r, column=c).font = Font(name="맑은 고딕", size=10)
             ws1.row_dimensions[cur_r].height = 32
+
+            # 같은 세부항목(핸들/타이어/블루투스이어폰 등)이 연속되면 하나로 병합
+            is_last_in_run = (i == len(items) - 1) or (items[i + 1][0] != sub_cat)
+            if is_last_in_run:
+                if cur_r > sub_run_start:
+                    ws1.merge_cells(start_row=sub_run_start, start_column=2, end_row=cur_r, end_column=2)
+                sub_run_start = cur_r + 1
+
             cur_r += 1
-            
+
         sec_end = cur_r - 1
         ws1.merge_cells(start_row=sec_start, start_column=1, end_row=sec_end, end_column=1)
         ws1.cell(row=sec_start, column=1, value=cat_name).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -329,22 +366,36 @@ def generate_integrated_pdf(row_data):
 
     for sec in CHECKLIST_SECTIONS:
         start_row = cur_idx
-        for sub_cat, desc, key in sec["items"]:
+        items = sec["items"]
+        for i, (sub_cat, desc, key) in enumerate(items):
             res_val = check_dict.get(key, "적정")
             if key == "item_km":
-                res_txt = f"km : {row_data.get('accumulated_km', '')}"
+                res_cell = Paragraph(f"km : {row_data.get('accumulated_km', '')}", tbl_font_center)
+            elif res_val == "해당없음":
+                res_cell = _na_result_drawing()
             else:
                 res_txt = "■ 적정  □ 정비필요" if res_val == "적정" else "□ 적정  ■ 정비필요"
+                res_cell = Paragraph(res_txt, tbl_font_center)
 
             table_data.append([
                 Paragraph(f"<b>{sec['category']}</b>", tbl_font_center),
                 Paragraph(sub_cat, tbl_font_center),
                 Paragraph(f"ㅇ {desc}", tbl_font),
-                Paragraph(res_txt, tbl_font_center)
+                res_cell
             ])
             cur_idx += 1
         end_row = cur_idx - 1
         spans.append(('SPAN', (0, start_row), (0, end_row)))
+
+        # 같은 세부항목(핸들/타이어/블루투스이어폰 등)이 연속되면 하나로 병합
+        run_start = start_row
+        for i in range(len(items)):
+            row_idx = start_row + i
+            is_last_in_run = (i == len(items) - 1) or (items[i + 1][0] != items[i][0])
+            if is_last_in_run:
+                if row_idx > run_start:
+                    spans.append(('SPAN', (1, run_start), (1, row_idx)))
+                run_start = row_idx + 1
 
     p1_table = Table(table_data, colWidths=[65, 95, 275, 100])
     p1_table.setStyle(TableStyle([
