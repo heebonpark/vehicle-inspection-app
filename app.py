@@ -159,6 +159,11 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
         else:
             car_in = car_choice
 
+    # 누적 km는 차량번호 바로 아래(같은 열)에 배치해 가독성을 높인다.
+    _km_c1, _km_c2, _km_c3, _km_c4 = st.columns([1.5, 2, 2, 2.5])
+    with _km_c4:
+        km_in = st.text_input("🛣️ 누적 km 수", placeholder="예: 24270", key="val_km")
+
     st.divider()
 
     # [파트 1: 이륜차량 점검표]
@@ -175,7 +180,7 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
                     with col_k1:
                         st.write(f"**{sub_cat}** : {desc}")
                     with col_k2:
-                        km_in = st.text_input("누적 km 수 입력", placeholder="예: 24270", key="val_km")
+                        st.write(f"km : {km_in}" if km_in else "km : (상단에 입력)")
                 else:
                     col_t, col_r = st.columns([3.2, 1.2])
                     with col_t:
