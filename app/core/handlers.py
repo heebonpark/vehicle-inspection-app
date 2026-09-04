@@ -16,23 +16,45 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 
-FONT_NAME = "Helvetica-Bold"
-system_fonts = [
-    "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
-    "/Library/Fonts/AppleGothic.ttf",
-    "C:/Windows/Fonts/malgun.ttf",
-    "C:/Windows/Fonts/gulim.ttc",
-    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
-]
-for p in system_fonts:
-    if os.path.exists(p):
-        try:
-            pdfmetrics.registerFont(TTFont("CustomKorean", p))
-            FONT_NAME = "CustomKorean"
-            break
-        except Exception:
-            pass
+# 한글 폰트는 배포 서버(OS)에 따라 설치 여부가 달라 시스템 폰트에 의존하면
+# 서버에서 글자가 깨진다(□□□). 리포지토리에 폰트 파일을 직접 포함해 어떤
+# 환경(로컬/Streamlit Cloud 등)에서도 동일하게 렌더링되도록 한다.
+_FONT_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "fonts")
+_FONT_REGULAR_PATH = os.path.join(_FONT_DIR, "NanumGothic-Regular.ttf")
+_FONT_BOLD_PATH = os.path.join(_FONT_DIR, "NanumGothic-Bold.ttf")
+
+FONT_NAME = "Helvetica"
+BOLD_FONT_NAME = "Helvetica-Bold"
+
+try:
+    pdfmetrics.registerFont(TTFont("NanumGothic", _FONT_REGULAR_PATH))
+    pdfmetrics.registerFont(TTFont("NanumGothic-Bold", _FONT_BOLD_PATH))
+    registerFontFamily(
+        "NanumGothic",
+        normal="NanumGothic", bold="NanumGothic-Bold",
+        italic="NanumGothic", boldItalic="NanumGothic-Bold",
+    )
+    FONT_NAME = "NanumGothic"
+    BOLD_FONT_NAME = "NanumGothic-Bold"
+except Exception:
+    # 번들 폰트 로드가 실패하면(파일 누락 등) 시스템 폰트로 최후 폴백한다.
+    for p in [
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/Library/Fonts/AppleGothic.ttf",
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/gulim.ttc",
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    ]:
+        if os.path.exists(p):
+            try:
+                pdfmetrics.registerFont(TTFont("CustomKorean", p))
+                FONT_NAME = "CustomKorean"
+                BOLD_FONT_NAME = "CustomKorean"
+                break
+            except Exception:
+                pass
 
 # 체크리스트 기본 항목 정의 (사진 속 원본 항목 100% 일치)
 CHECKLIST_SECTIONS = [
@@ -129,6 +151,7 @@ def generate_integrated_excel(row_data):
     ws1.column_dimensions['B'].width = 24
     ws1.column_dimensions['C'].width = 50
     ws1.column_dimensions['D'].width = 18
+    ws1.column_dimensions['E'].width = 24
 
     # 타이틀
     ws1.merge_cells("A2:D2")
@@ -137,12 +160,13 @@ def generate_integrated_excel(row_data):
     ws1["A2"].alignment = Alignment(horizontal="center", vertical="center")
     ws1.row_dimensions[2].height = 36
 
-    # 헤더 메타
+    # 헤더 메타 (본부명/차량번호는 값이 길어 잘리지 않도록 2개 열을 병합해 공간을 확보한다)
+    ws1.merge_cells("A4:B4")
     ws1["A4"] = f"● 본부명 : {row_data['hq_name']}"
-    ws1["B4"] = f"● 지사명 : {row_data['branch_name']}"
-    ws1.merge_cells("C4:D4")
-    ws1["C4"] = f"● 차량번호 : {row_data['car_no']}"
-    for c in ["A4", "B4", "C4"]:
+    ws1["C4"] = f"● 지사명 : {row_data['branch_name']}"
+    ws1.merge_cells("D4:E4")
+    ws1["D4"] = f"● 차량번호 : {row_data['car_no']}"
+    for c in ["A4", "C4", "D4"]:
         ws1[c].font = Font(name="맑은 고딕", size=11, bold=True)
     ws1.row_dimensions[4].height = 24
 
@@ -179,8 +203,8 @@ def generate_integrated_excel(row_data):
             
             for c in range(1, 5):
                 ws1.cell(row=cur_r, column=c).border = thin_border
-                ws1.cell(row=cur_r, column=c).font = Font(name="맑은 고딕", size=9)
-            ws1.row_dimensions[cur_r].height = 28
+                ws1.cell(row=cur_r, column=c).font = Font(name="맑은 고딕", size=10)
+            ws1.row_dimensions[cur_r].height = 32
             cur_r += 1
             
         sec_end = cur_r - 1
@@ -259,22 +283,22 @@ def generate_integrated_pdf(row_data):
     elements = []
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(name="T1", fontName=FONT_NAME, fontSize=15, alignment=1, spaceAfter=14)
-    meta_style = ParagraphStyle(name="M1", fontName=FONT_NAME, fontSize=9.5, leading=13)
-    tbl_font = ParagraphStyle(name="TB", fontName=FONT_NAME, fontSize=7.5, leading=10)
-    tbl_font_center = ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8, leading=10, alignment=1)
+    title_style = ParagraphStyle(name="T1", fontName=BOLD_FONT_NAME, fontSize=16, alignment=1, spaceAfter=18)
+    meta_style = ParagraphStyle(name="M1", fontName=FONT_NAME, fontSize=10, leading=16)
+    tbl_font = ParagraphStyle(name="TB", fontName=FONT_NAME, fontSize=8, leading=12.5)
+    tbl_font_center = ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8.5, leading=12.5, alignment=1)
 
     # === [PAGE 1: 이륜차량 안전관리 상태 평가] ===
     elements.append(Paragraph("이륜차량 안전관리 상태 평가", title_style))
-    
+
     meta_p1 = Table([[
         Paragraph(f"● 본부명 : {row_data['hq_name']}", meta_style),
         Paragraph(f"● 지사명 : {row_data['branch_name']}", meta_style),
         Paragraph(f"● 차량번호 : {row_data['car_no']}", meta_style)
     ]], colWidths=[180, 160, 195])
-    meta_p1.setStyle(TableStyle([('BOTTOMPADDING', (0,0), (-1,-1), 4)]))
+    meta_p1.setStyle(TableStyle([('BOTTOMPADDING', (0,0), (-1,-1), 8)]))
     elements.append(meta_p1)
-    elements.append(Spacer(1, 3))
+    elements.append(Spacer(1, 8))
 
     table_data = [
         [
@@ -315,11 +339,13 @@ def generate_integrated_pdf(row_data):
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('GRID', (0,0), (-1,-1), 0.7, colors.black),
         ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
-        ('TOPPADDING', (0,0), (-1,-1), 2.5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('LEFTPADDING', (0,0), (-1,-1), 5),
+        ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ] + spans))
     elements.append(p1_table)
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, 12))
 
     sign_data = [
         ["", Paragraph(f"점검일시 : &nbsp;&nbsp;&nbsp;&nbsp; {row_data.get('inspect_date', '')}", meta_style)],
@@ -337,7 +363,7 @@ def generate_integrated_pdf(row_data):
     elements.append(PageBreak())
     elements.append(Paragraph("기술/업무용 차량 안전관리 상태 평가", title_style))
     elements.append(meta_p1)
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, 10))
 
     def make_rl_img(b):
         if b:
@@ -364,6 +390,11 @@ def generate_integrated_pdf(row_data):
         ('BACKGROUND', (0,2), (1,2), colors.whitesmoke),
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
         ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('FONTSIZE', (0,0), (-1,-1), 11),
+        ('TOPPADDING', (0,0), (1,0), 6),
+        ('BOTTOMPADDING', (0,0), (1,0), 6),
+        ('TOPPADDING', (0,2), (1,2), 6),
+        ('BOTTOMPADDING', (0,2), (1,2), 6),
     ]))
     elements.append(p2_table)
 
