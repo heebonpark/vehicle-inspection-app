@@ -13,13 +13,16 @@ from openpyxl.worksheet.properties import PageSetupProperties
 
 
 def _apply_a4_print_setup(ws, orientation="portrait"):
-    """다운로드한 엑셀을 그대로 인쇄해도 A4 용지 너비에 자동으로 맞춰지도록 설정한다."""
+    """다운로드한 엑셀을 그대로 인쇄해도 A4 용지 너비에 자동으로 맞춰지도록 설정하고,
+    화면 눈금선은 숨긴 채 '페이지 나누기 미리보기'로 열리도록 한다."""
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.orientation = orientation
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
     ws.page_margins = PageMargins(left=0.35, right=0.35, top=0.5, bottom=0.5, header=0.2, footer=0.2)
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.view = "pageBreakPreview"
 
 # PDF
 from reportlab.lib.pagesizes import A4
@@ -153,12 +156,10 @@ def generate_integrated_excel(row_data):
     # [Sheet 1] 이륜차량 안전관리 상태 평가 (체크리스트)
     ws1 = wb.active
     ws1.title = "안전관리_점검표"
-    ws1.views.sheetView[0].showGridLines = True
     _apply_a4_print_setup(ws1, orientation="portrait")
 
     # [Sheet 2] 차량 4면 사진 평가
     ws2 = wb.create_sheet(title="4면_사진평가")
-    ws2.views.sheetView[0].showGridLines = True
     _apply_a4_print_setup(ws2, orientation="landscape")
     
     # 얇은 테두리
