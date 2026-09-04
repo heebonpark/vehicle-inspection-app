@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import json
 import streamlit as st
 from PIL import Image
@@ -27,7 +28,7 @@ def _apply_a4_print_setup(ws, orientation="portrait"):
 # PDF
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Image as ReportLabImage, Spacer, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -165,29 +166,57 @@ def _balance_top_spacer(flowables, avail_width, avail_height):
     return Spacer(1, top_pad)
 
 
-@st.cache_data(show_spinner=False)
-def generate_integrated_excel(row_data):
-    wb = Workbook()
-    
-    # [Sheet 1] 이륜차량 안전관리 상태 평가 (체크리스트)
-    ws1 = wb.active
-    ws1.title = "안전관리_점검표"
-    _apply_a4_print_setup(ws1, orientation="portrait")
+# 좁은 칸에서 줄바꿈이 "스크린미들(전면" / "바람막이)"처럼 괄호 중간에서
+# 어색하게 끊기지 않도록, 이 항목만 표시 시점에 강제로 줄을 나눈다.
+_SCREEN_MIDDLE_LABEL = "스크린미들(전면 바람막이)"
 
-    # [Sheet 2] 차량 4면 사진 평가
-    ws2 = wb.create_sheet(title="4면_사진평가")
-    _apply_a4_print_setup(ws2, orientation="landscape")
-    
-    # 얇은 테두리
-    thin_border = Border(
-        left=Side(style='thin', color='000000'),
-        right=Side(style='thin', color='000000'),
-        top=Side(style='thin', color='000000'),
-        bottom=Side(style='thin', color='000000')
-    )
-    header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-    
-    # === Sheet 1 채우기 ===
+
+def _excel_sub_cat_display(sub_cat):
+    if sub_cat == _SCREEN_MIDDLE_LABEL:
+        return "스크린미들\n(전면바람막이)"
+    return sub_cat
+
+
+def _pdf_sub_cat_display(sub_cat):
+    if sub_cat == _SCREEN_MIDDLE_LABEL:
+        return "스크린미들<br/>(전면바람막이)"
+    return sub_cat
+
+
+def _unique_sheet_title(base, used_titles):
+    """엑셀 시트명 규칙(31자 이하, [ ] : * ? / \\ 금지, 중복 불가)을 지켜 고유한 이름을 만든다."""
+    cleaned = re.sub(r'[\[\]:\*\?/\\]', '_', base).strip() or "sheet"
+    cleaned = cleaned[:31]
+    candidate = cleaned
+    n = 2
+    while candidate in used_titles:
+        suffix = f"_{n}"
+        candidate = cleaned[:31 - len(suffix)] + suffix
+        n += 1
+    used_titles.add(candidate)
+    return candidate
+
+
+_THIN_BORDER = Border(
+    left=Side(style='thin', color='000000'),
+    right=Side(style='thin', color='000000'),
+    top=Side(style='thin', color='000000'),
+    bottom=Side(style='thin', color='000000')
+)
+_HEADER_FILL = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+_NA_BORDER = Border(
+    left=Side(style='thin', color='000000'),
+    right=Side(style='thin', color='000000'),
+    top=Side(style='thin', color='000000'),
+    bottom=Side(style='thin', color='000000'),
+    diagonal=Side(style='thin', color='999999'),
+    diagonalUp=True,
+)
+_NA_FILL = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
+
+
+def _write_checklist_sheet(ws1, row_data):
+    """1개 차량의 점검표를 ws1에 채운다. 단일/일괄 엑셀 생성에서 공통으로 사용."""
     ws1.column_dimensions['A'].width = 15
     ws1.column_dimensions['B'].width = 24
     ws1.column_dimensions['C'].width = 50
@@ -219,19 +248,9 @@ def generate_integrated_excel(row_data):
     for col_l in ["A5", "B5", "C5", "D5"]:
         ws1[col_l].font = Font(name="맑은 고딕", size=10, bold=True)
         ws1[col_l].alignment = Alignment(horizontal="center", vertical="center")
-        ws1[col_l].fill = header_fill
-        ws1[col_l].border = thin_border
+        ws1[col_l].fill = _HEADER_FILL
+        ws1[col_l].border = _THIN_BORDER
     ws1.row_dimensions[5].height = 24
-
-    na_border = Border(
-        left=Side(style='thin', color='000000'),
-        right=Side(style='thin', color='000000'),
-        top=Side(style='thin', color='000000'),
-        bottom=Side(style='thin', color='000000'),
-        diagonal=Side(style='thin', color='999999'),
-        diagonalUp=True,
-    )
-    na_fill = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
 
     check_dict = json.loads(row_data.get("check_data", "{}"))
     cur_r = 6
@@ -242,7 +261,7 @@ def generate_integrated_excel(row_data):
         items = sec["items"]
         sub_run_start = cur_r
         for i, (sub_cat, desc, key) in enumerate(items):
-            ws1.cell(row=cur_r, column=2, value=sub_cat).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws1.cell(row=cur_r, column=2, value=_excel_sub_cat_display(sub_cat)).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             ws1.cell(row=cur_r, column=3, value=f"ㅇ {desc}").alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
             # 결과 표시 (적정 / 정비필요 / 해당없음 - 대상이 아닌 항목은 연한 회색 음영 + 대각선으로 표시)
@@ -251,25 +270,25 @@ def generate_integrated_excel(row_data):
             result_cell = ws1.cell(row=cur_r, column=4)
             if key == "item_km":
                 result_cell.value = f"km : {row_data.get('accumulated_km', '')}"
-                result_cell.border = thin_border
+                result_cell.border = _THIN_BORDER
                 result_cell.font = Font(name="맑은 고딕", size=10)
             elif is_na:
                 result_cell.value = "해당없음"
-                result_cell.border = na_border
+                result_cell.border = _NA_BORDER
                 result_cell.font = Font(name="맑은 고딕", size=9, color="595959", italic=True)
-                result_cell.fill = na_fill
+                result_cell.fill = _NA_FILL
             else:
                 result_cell.value = "■ 적정   □ 정비필요" if res_val == "적정" else "□ 적정   ■ 정비필요"
-                result_cell.border = thin_border
+                result_cell.border = _THIN_BORDER
                 result_cell.font = Font(name="맑은 고딕", size=10)
             result_cell.alignment = Alignment(horizontal="center", vertical="center")
 
             for c in range(1, 4):
                 cell = ws1.cell(row=cur_r, column=c)
-                cell.border = thin_border
+                cell.border = _THIN_BORDER
                 cell.font = Font(name="맑은 고딕", size=10)
                 if is_na and c >= 2:
-                    cell.fill = na_fill
+                    cell.fill = _NA_FILL
             ws1.row_dimensions[cur_r].height = 32
 
             # 같은 세부항목(핸들/타이어/블루투스이어폰 등)이 연속되면 하나로 병합
@@ -285,18 +304,34 @@ def generate_integrated_excel(row_data):
         ws1.merge_cells(start_row=sec_start, start_column=1, end_row=sec_end, end_column=1)
         ws1.cell(row=sec_start, column=1, value=cat_name).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    # 하단 점검일시 및 점검자 서명란
+    # 하단 점검일시 및 점검자 서명란 (가운데 정렬 + 폰트 확대, 실제 서명 이미지가 있으면 함께 삽입)
     cur_r += 1
-    ws1.merge_cells(start_row=cur_r, start_column=3, end_row=cur_r, end_column=4)
-    ws1.cell(row=cur_r, column=3, value=f"점검일시 :  {row_data.get('inspect_date', '')}").font = Font(name="맑은 고딕", size=11, bold=True)
-    cur_r += 1
-    ws1.merge_cells(start_row=cur_r, start_column=3, end_row=cur_r, end_column=4)
-    ws1.cell(row=cur_r, column=3, value=f"점 검 자 :  {row_data.get('inspector', '')} (서명)").font = Font(name="맑은 고딕", size=11, bold=True)
+    ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
+    c1 = ws1.cell(row=cur_r, column=1, value=f"점검일시 :  {row_data.get('inspect_date', '')}")
+    c1.font = Font(name="맑은 고딕", size=13, bold=True)
+    c1.alignment = Alignment(horizontal="center", vertical="center")
 
-    # === Sheet 2 채우기 (사진 4면) ===
+    cur_r += 1
+    ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
+    c2 = ws1.cell(row=cur_r, column=1, value=f"점 검 자 :  {row_data.get('inspector', '')}")
+    c2.font = Font(name="맑은 고딕", size=13, bold=True)
+    c2.alignment = Alignment(horizontal="center", vertical="center")
+
+    sig_bytes = row_data.get("signature_image")
+    if sig_bytes:
+        cur_r += 1
+        ws1.row_dimensions[cur_r].height = 45
+        ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
+        sig_img = OpenPyxlImage(io.BytesIO(sig_bytes))
+        sig_img.width, sig_img.height = 130, 52
+        ws1.add_image(sig_img, f"C{cur_r}")
+
+
+def _write_photo_sheet(ws2, row_data):
+    """1개 차량의 4면 사진 시트를 ws2에 채운다. 단일/일괄 엑셀 생성에서 공통으로 사용."""
     for c in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']:
         ws2.column_dimensions[c].width = 11
-        
+
     ws2.merge_cells("A2:H2")
     ws2["A2"] = "기술/업무용 차량 안전관리 상태 평가"
     ws2["A2"].font = Font(name="맑은 고딕", size=18, bold=True)
@@ -318,10 +353,10 @@ def generate_integrated_excel(row_data):
         cell = ws2.cell(row=rs, column=cs, value=label)
         cell.font = Font(name="맑은 고딕", size=11, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.fill = header_fill
+        cell.fill = _HEADER_FILL
         for r in range(rs, re + 1):
             for c in range(cs, ce + 1):
-                ws2.cell(row=r, column=c).border = thin_border
+                ws2.cell(row=r, column=c).border = _THIN_BORDER
 
     draw_photo_box(1, 6, 4, 21, "전면")
     draw_photo_box(5, 6, 8, 21, "후면")
@@ -342,25 +377,67 @@ def generate_integrated_excel(row_data):
             tmp_io.seek(0)
             ws2.add_image(OpenPyxlImage(tmp_io), pos)
 
+
+@st.cache_data(show_spinner=False)
+def generate_integrated_excel(row_data):
+    wb = Workbook()
+
+    ws1 = wb.active
+    ws1.title = "안전관리_점검표"
+    _apply_a4_print_setup(ws1, orientation="portrait")
+    _write_checklist_sheet(ws1, row_data)
+
+    ws2 = wb.create_sheet(title="4면_사진평가")
+    _apply_a4_print_setup(ws2, orientation="landscape")
+    _write_photo_sheet(ws2, row_data)
+
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
     return out
 
+
 @st.cache_data(show_spinner=False)
-def generate_integrated_pdf(row_data):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        leftMargin=30, rightMargin=30, topMargin=30, bottomMargin=25
-    )
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(name="T1", fontName=BOLD_FONT_NAME, fontSize=16, alignment=1, spaceAfter=18)
-    meta_style = ParagraphStyle(name="M1", fontName=FONT_NAME, fontSize=10, leading=16)
-    tbl_font = ParagraphStyle(name="TB", fontName=FONT_NAME, fontSize=8, leading=12.5)
-    tbl_font_center = ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8.5, leading=12.5, alignment=1)
+def generate_batch_excel(row_data_list):
+    """관리자가 선택한 여러 건을 한 워크북에 차량별로 2개 시트씩 모아 담는다."""
+    wb = Workbook()
+    used_titles = set()
+    for idx, row_data in enumerate(row_data_list):
+        base = row_data.get("car_no") or f"차량{idx + 1}"
+
+        ws1 = wb.active if idx == 0 else wb.create_sheet()
+        ws1.title = _unique_sheet_title(f"{base}_점검표", used_titles)
+        _apply_a4_print_setup(ws1, orientation="portrait")
+        _write_checklist_sheet(ws1, row_data)
+
+        ws2 = wb.create_sheet()
+        ws2.title = _unique_sheet_title(f"{base}_사진", used_titles)
+        _apply_a4_print_setup(ws2, orientation="landscape")
+        _write_photo_sheet(ws2, row_data)
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out
+
+
+def _build_pdf_styles():
+    return {
+        "title": ParagraphStyle(name="T1", fontName=BOLD_FONT_NAME, fontSize=16, alignment=1, spaceAfter=18),
+        "meta": ParagraphStyle(name="M1", fontName=FONT_NAME, fontSize=10, leading=16),
+        "tbl": ParagraphStyle(name="TB", fontName=FONT_NAME, fontSize=8, leading=12.5),
+        "tbl_center": ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8.5, leading=12.5, alignment=1),
+        "sign": ParagraphStyle(name="SIGN", fontName=FONT_NAME, fontSize=12, alignment=1, leading=19),
+    }
+
+
+def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
+    """차량 한 대의 1p(점검표) + 2p(4면사진) 콘텐츠를 만든다. 단일/일괄 PDF 생성에서 공통으로 사용."""
+    title_style = styles["title"]
+    meta_style = styles["meta"]
+    tbl_font = styles["tbl"]
+    tbl_font_center = styles["tbl_center"]
+    sign_style = styles["sign"]
 
     # === [PAGE 1: 이륜차량 안전관리 상태 평가] ===
     title1 = Paragraph("이륜차량 안전관리 상태 평가", title_style)
@@ -405,7 +482,7 @@ def generate_integrated_pdf(row_data):
 
             table_data.append([
                 Paragraph(f"<b>{sec['category']}</b>", tbl_font_center),
-                Paragraph(sub_cat, tbl_font_center),
+                Paragraph(_pdf_sub_cat_display(sub_cat), tbl_font_center),
                 Paragraph(f"ㅇ {desc}", tbl_font),
                 res_cell
             ])
@@ -436,25 +513,30 @@ def generate_integrated_pdf(row_data):
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ] + spans + na_row_styles))
 
-    sign_data = [
-        ["", Paragraph(f"점검일시 : &nbsp;&nbsp;&nbsp;&nbsp; {row_data.get('inspect_date', '')}", meta_style)],
-        ["", Paragraph(f"점검자 : &nbsp;&nbsp;&nbsp;&nbsp; {row_data.get('inspector', '')} (서명)", meta_style)]
+    # 점검일시/점검자는 가운데 정렬 + 폰트 확대. 실제 서명 이미지가 있으면 이름 아래에 함께 표시한다.
+    sign_block = [
+        Paragraph(f"점검일시 :  {row_data.get('inspect_date', '')}", sign_style),
+        Spacer(1, 4),
+        Paragraph(f"점검자 :  {row_data.get('inspector', '')}", sign_style),
     ]
-    sign_table = Table(sign_data, colWidths=[330, 205])
-    sign_table.setStyle(TableStyle([
-        ('ALIGN', (1,0), (1,-1), 'RIGHT'),
-        ('TOPPADDING', (0,0), (-1,-1), 2),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2)
-    ]))
+    sig_bytes = row_data.get("signature_image")
+    if sig_bytes:
+        sig_img = ReportLabImage(io.BytesIO(sig_bytes), width=110, height=44)
+        sig_img.hAlign = 'CENTER'
+        sign_block.append(Spacer(1, 4))
+        sign_block.append(sig_img)
 
-    # 위/아래 여백 비율을 맞추기 위해 실제 콘텐츠 높이를 측정해 상단에 여백을 배분한다.
-    page1_flowables = [title1, meta_p1, Spacer(1, 8), p1_table, Spacer(1, 12), sign_table]
-    elements.append(_balance_top_spacer(page1_flowables, doc.width, doc.height))
-    elements.extend(page1_flowables)
+    page1_flowables = [title1, meta_p1, Spacer(1, 8), p1_table, Spacer(1, 12)] + sign_block
+    balance1 = _balance_top_spacer(page1_flowables, doc_width, doc_height)
 
     # === [PAGE 2: 기술/업무용 차량 안전관리 상태 평가 (4면 사진)] ===
-    elements.append(PageBreak())
     title2 = Paragraph("기술/업무용 차량 안전관리 상태 평가", title_style)
+    meta_p2 = Table([[
+        Paragraph(f"● 본부명 : {row_data['hq_name']}", meta_style),
+        Paragraph(f"● 지사명 : {row_data['branch_name']}", meta_style),
+        Paragraph(f"● 차량번호 : {row_data['car_no']}", meta_style)
+    ]], colWidths=[180, 160, 195])
+    meta_p2.setStyle(TableStyle([('BOTTOMPADDING', (0,0), (-1,-1), 8)]))
 
     def make_rl_img(b):
         if b:
@@ -488,10 +570,40 @@ def generate_integrated_pdf(row_data):
         ('BOTTOMPADDING', (0,2), (1,2), 6),
     ]))
 
-    page2_flowables = [title2, meta_p1, Spacer(1, 10), p2_table]
-    elements.append(_balance_top_spacer(page2_flowables, doc.width, doc.height))
-    elements.extend(page2_flowables)
+    page2_flowables = [title2, meta_p2, Spacer(1, 10), p2_table]
+    balance2 = _balance_top_spacer(page2_flowables, doc_width, doc_height)
 
-    doc.build(elements)
+    return [balance1] + page1_flowables + [PageBreak(), balance2] + page2_flowables
+
+
+@st.cache_data(show_spinner=False)
+def generate_integrated_pdf(row_data):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=30, rightMargin=30, topMargin=30, bottomMargin=25
+    )
+    styles = _build_pdf_styles()
+    flowables = _build_vehicle_pdf_flowables(row_data, doc.width, doc.height, styles)
+    doc.build(flowables)
+    buffer.seek(0)
+    return buffer
+
+
+@st.cache_data(show_spinner=False)
+def generate_batch_pdf(row_data_list):
+    """관리자가 선택한 여러 건을 차량별로 이어 붙여 한 PDF로 만든다."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=30, rightMargin=30, topMargin=30, bottomMargin=25
+    )
+    styles = _build_pdf_styles()
+    all_flowables = []
+    for idx, row_data in enumerate(row_data_list):
+        if idx > 0:
+            all_flowables.append(PageBreak())
+        all_flowables.extend(_build_vehicle_pdf_flowables(row_data, doc.width, doc.height, styles))
+    doc.build(all_flowables)
     buffer.seek(0)
     return buffer

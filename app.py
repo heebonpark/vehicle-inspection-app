@@ -3,12 +3,47 @@ import json
 import hashlib
 import hmac
 import os
+import io
 import sqlite3
 from datetime import datetime
+from PIL import Image
+from streamlit_drawable_canvas import st_canvas
 
 from app.core.db import init_db, get_db
-from app.core.handlers import CHECKLIST_SECTIONS, generate_integrated_excel, generate_integrated_pdf, compress_image_bytes
+from app.core.handlers import (
+    CHECKLIST_SECTIONS, generate_integrated_excel, generate_integrated_pdf,
+    generate_batch_excel, generate_batch_pdf, compress_image_bytes,
+)
 from app.ui.styles import apply_custom_styles
+
+INSPECTION_COLUMNS = [
+    "id", "created_at", "inspect_date", "inspector", "hq_name", "branch_name", "car_no",
+    "check_data", "accumulated_km", "signature_name", "signature_image",
+    "img_front", "img_rear", "img_right", "img_left",
+]
+
+
+def row_to_inspection_dict(rec):
+    """SQLite는 ALTER TABLE로 추가된 컬럼을 항상 테이블 끝에 붙이기 때문에,
+    SELECT * 로는 DB 생성 시점에 따라 컬럼 순서가 달라질 수 있다. 그래서 항상
+    컬럼명을 명시해서 조회하고, 그 목록(INSPECTION_COLUMNS)과 짝지어 dict로
+    변환한다."""
+    return dict(zip(INSPECTION_COLUMNS, rec))
+
+
+def _has_signature(canvas_result, min_dark_pixels=30):
+    if canvas_result is None or canvas_result.image_data is None:
+        return False
+    arr = canvas_result.image_data
+    return int((arr[:, :, 0] < 200).sum()) > min_dark_pixels
+
+
+def _signature_png_bytes(canvas_result):
+    arr = canvas_result.image_data.astype("uint8")
+    img = Image.fromarray(arr, "RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 HQ_NAME = "강북/강원본부"
 BRANCHES = ["중앙지사", "강북지사", "서대문지사", "고양지사", "의정부지사", "남양주지사", "강릉지사", "원주지사", "춘천고객지원팀"]
@@ -248,6 +283,24 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
 
     st.divider()
 
+    # [파트 3: 점검자 서명]
+    st.subheader("3. 점검자 서명")
+    st.caption("아래 칸에 손가락(모바일) 또는 마우스로 직접 서명해주세요. 서명은 보고서에 그대로 표시됩니다.")
+    sig_col, _ = st.columns([1, 1])
+    with sig_col:
+        canvas_result = st_canvas(
+            fill_color="rgba(255,255,255,0)",
+            stroke_width=3,
+            stroke_color="#000000",
+            background_color="#FFFFFF",
+            height=140,
+            width=350,
+            drawing_mode="freedraw",
+            key="signature_pad",
+        )
+
+    st.divider()
+
     if st.button("점검표 및 사진 일괄 전송 완료", type="primary", use_container_width=True):
         km_clean = km_in.replace(",", "").strip() if km_in else ""
         if not inspector_in or not car_in:
@@ -256,20 +309,23 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
             st.error("전면, 후면, 우측면, 좌측면 4장의 사진을 모두 등록해주세요.")
         elif not km_clean.isdigit():
             st.error("누적 km 수는 숫자로만 입력해주세요. (예: 24270)")
+        elif not _has_signature(canvas_result):
+            st.error("점검자 서명란에 서명을 해주세요.")
         else:
+            sig_bytes = _signature_png_bytes(canvas_result)
             with get_db() as conn:
                 conn.execute("""
                     INSERT INTO integrated_inspections (
                         created_at, inspect_date, inspector, hq_name, branch_name, car_no,
-                        check_data, accumulated_km, signature_name,
+                        check_data, accumulated_km, signature_name, signature_image,
                         img_front, img_rear, img_right, img_left
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     datetime.now().strftime("%y. %m. %d"),
                     inspector_in, hq_in, branch_in, car_in,
                     json.dumps(collected_checks, ensure_ascii=False),
-                    km_clean, inspector_in,
+                    km_clean, inspector_in, sig_bytes,
                     compress_image_bytes(img_f.getvalue()), compress_image_bytes(img_r.getvalue()),
                     compress_image_bytes(img_rt.getvalue()), compress_image_bytes(img_lt.getvalue())
                 ))
@@ -392,13 +448,55 @@ elif active_menu == "관리자 종합 조회/출력":
     if not rows:
         st.warning("등록된 점검 내역이 없습니다.")
     else:
-        st.dataframe(
+        st.caption("행을 클릭해 여러 건을 선택하면 아래에 일괄 다운로드 옵션이 나타납니다.")
+        select_event = st.dataframe(
             [{"번호": r[0], "등록일시": r[1], "점검일자": r[2], "점검자": r[3], "지사": r[5], "차량번호": r[6], "누적km": r[7]} for r in rows],
-            use_container_width=True
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="multi-row",
+            key="admin_inspection_table",
         )
 
+        selected_positions = list(select_event.selection.rows) if select_event and select_event.selection else []
+        selected_ids = [rows[i][0] for i in selected_positions]
+
+        if selected_ids:
+            with get_db() as conn:
+                c = conn.cursor()
+                placeholders = ",".join("?" * len(selected_ids))
+                c.execute(
+                    f"SELECT {', '.join(INSPECTION_COLUMNS)} FROM integrated_inspections WHERE id IN ({placeholders})",
+                    selected_ids
+                )
+                batch_by_id = {r[0]: row_to_inspection_dict(r) for r in c.fetchall()}
+            # 화면에 표시된 순서(선택한 순서가 아니라 목록 순서)대로 정렬
+            batch_recs = [batch_by_id[i] for i in selected_ids if i in batch_by_id]
+
+            st.success(f"✅ {len(batch_recs)}건 선택됨 — 아래에서 한 번에 내려받을 수 있습니다.")
+            bb1, bb2 = st.columns(2)
+            with bb1:
+                batch_xlsx = generate_batch_excel(batch_recs)
+                st.download_button(
+                    label=f"📊 선택 {len(batch_recs)}건 일괄 엑셀 다운로드 (차량별 시트 분리)",
+                    data=batch_xlsx,
+                    file_name=f"일괄점검_{len(batch_recs)}건.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="batch_xlsx_dl",
+                )
+            with bb2:
+                batch_pdf = generate_batch_pdf(batch_recs)
+                st.download_button(
+                    label=f"📄 선택 {len(batch_recs)}건 일괄 PDF 다운로드 (차량별로 이어붙임)",
+                    data=batch_pdf,
+                    file_name=f"일괄점검_{len(batch_recs)}건.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="batch_pdf_dl",
+                )
+
         st.divider()
-        st.subheader("2세트 원본 양식 보고서 다운로드")
+        st.subheader("2세트 원본 양식 보고서 다운로드 (건별)")
 
         target_id = st.selectbox(
             "출력할 차량 선택",
@@ -408,16 +506,11 @@ elif active_menu == "관리자 종합 조회/출력":
 
         with get_db() as conn:
             c = conn.cursor()
-            c.execute("SELECT * FROM integrated_inspections WHERE id = ?", (target_id,))
+            c.execute(f"SELECT {', '.join(INSPECTION_COLUMNS)} FROM integrated_inspections WHERE id = ?", (target_id,))
             rec = c.fetchone()
 
         if rec:
-            rec_data = {
-                "id": rec[0], "created_at": rec[1], "inspect_date": rec[2], "inspector": rec[3],
-                "hq_name": rec[4], "branch_name": rec[5], "car_no": rec[6],
-                "check_data": rec[7], "accumulated_km": rec[8], "signature_name": rec[9],
-                "img_front": rec[10], "img_rear": rec[11], "img_right": rec[12], "img_left": rec[13]
-            }
+            rec_data = row_to_inspection_dict(rec)
 
             d_col1, d_col2 = st.columns(2)
             with d_col1:

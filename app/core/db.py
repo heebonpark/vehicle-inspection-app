@@ -29,12 +29,19 @@ def init_db():
                 check_data TEXT,
                 accumulated_km TEXT,
                 signature_name TEXT,
+                signature_image BLOB,
                 img_front BLOB,
                 img_rear BLOB,
                 img_right BLOB,
                 img_left BLOB
             )
         """)
+        # 기존에 만들어진 DB 파일에는 signature_image 컬럼이 없을 수 있으므로
+        # 없는 경우에만 추가한다(가벼운 마이그레이션).
+        try:
+            conn.execute("ALTER TABLE integrated_inspections ADD COLUMN signature_image BLOB")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS vehicles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
