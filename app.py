@@ -14,6 +14,33 @@ HQ_NAME = "강북/강원본부"
 BRANCHES = ["중앙지사", "강북지사", "서대문지사", "고양지사", "의정부지사", "남양주지사", "강릉지사", "원주지사", "춘천고객지원팀"]
 DIRECT_INPUT_LABEL = "-- 직접 입력 --"
 
+
+def force_rear_camera():
+    """st.camera_input은 후면/전면 카메라를 지정하는 기능이 없어(전면이 기본으로
+    열리는 문제) 대신 파일 업로더의 실제 <input type=file> 요소에 capture="environment"를
+    주입한다. 이렇게 하면 모바일에서 사진 등록 버튼을 누를 때 스마트폰 기본 카메라 앱이
+    후면 카메라로 바로 열린다."""
+    st.iframe("""
+        <script>
+        (function() {
+            function patchInputs() {
+                try {
+                    var doc = window.parent.document;
+                    doc.querySelectorAll('input[type="file"]').forEach(function(el) {
+                        if (el.getAttribute('capture') !== 'environment') {
+                            el.setAttribute('capture', 'environment');
+                        }
+                    });
+                } catch (e) {}
+            }
+            patchInputs();
+            try {
+                new MutationObserver(patchInputs).observe(window.parent.document.body, {childList: true, subtree: true});
+            } catch (e) {}
+        })();
+        </script>
+    """, height=1)
+
 # 최초 1회(DB에 계정이 하나도 없을 때)만 자동 생성되는 기본 계정. 이후 비밀번호는
 # DB(users 테이블)에 저장되며 로그인 후 화면에서 변경 가능하다.
 DEFAULT_PASSWORD = "admin1234"
@@ -193,19 +220,20 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
 
     # [파트 2: 4면 사진 촬영]
     st.subheader("2. 기술/업무용 차량 4면 사진 등록")
-    input_method = st.radio("촬영 방식", ["스마트폰 카메라 촬영", "사진 보관함 업로드"], horizontal=True)
+    st.caption("사진 등록을 누르면 스마트폰 후면 카메라가 바로 열립니다. 기존 사진을 올리려면 '파일 선택'에서 갤러리를 선택하세요.")
+    force_rear_camera()
 
     col_l, col_r = st.columns(2)
     with col_l:
         st.markdown("**● 1. 전면 (Front)**")
-        img_f = st.camera_input("전면", key="cam_f") if "카메라" in input_method else st.file_uploader("전면", type=["jpg", "jpeg", "png"], key="up_f")
+        img_f = st.file_uploader("전면", type=["jpg", "jpeg", "png"], key="up_f")
         st.markdown("**● 3. 우측면 (Right)**")
-        img_rt = st.camera_input("우측면", key="cam_rt") if "카메라" in input_method else st.file_uploader("우측면", type=["jpg", "jpeg", "png"], key="up_rt")
+        img_rt = st.file_uploader("우측면", type=["jpg", "jpeg", "png"], key="up_rt")
     with col_r:
         st.markdown("**● 2. 후면 (Rear)**")
-        img_r = st.camera_input("후면", key="cam_r") if "카메라" in input_method else st.file_uploader("후면", type=["jpg", "jpeg", "png"], key="up_r")
+        img_r = st.file_uploader("후면", type=["jpg", "jpeg", "png"], key="up_r")
         st.markdown("**● 4. 좌측면 (Left)**")
-        img_lt = st.camera_input("좌측면", key="cam_lt") if "카메라" in input_method else st.file_uploader("좌측면", type=["jpg", "jpeg", "png"], key="up_lt")
+        img_lt = st.file_uploader("좌측면", type=["jpg", "jpeg", "png"], key="up_lt")
 
     st.divider()
 
