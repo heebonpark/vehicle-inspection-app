@@ -2,11 +2,16 @@ import streamlit as st
 import json
 import hashlib
 import hmac
+import sqlite3
 from datetime import datetime
 
 from app.core.db import init_db, get_db
 from app.core.handlers import CHECKLIST_SECTIONS, generate_integrated_excel, generate_integrated_pdf, compress_image_bytes
 from app.ui.styles import apply_custom_styles
+
+HQ_NAME = "강북/강원본부"
+BRANCHES = ["중앙지사", "강북지사", "서대문지사", "동대문지사", "기타지사"]
+DIRECT_INPUT_LABEL = "-- 직접 입력 --"
 
 # --- 1. 페이지 설정 및 폰트/스타일 세팅 ---
 st.set_page_config(page_title="이륜/업무용 차량 안전관리 종합시스템", layout="wide", initial_sidebar_state="expanded")
@@ -88,11 +93,24 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
     with c1:
         inspector_in = st.text_input("점검자 성명", placeholder="장부환")
     with c2:
-        hq_in = st.text_input("본부명", value="강북/강원본부", disabled=True)
+        hq_in = st.text_input("본부명", value=HQ_NAME, disabled=True)
     with c3:
-        branch_in = st.selectbox("지사명 선택", ["중앙지사", "강북지사", "서대문지사", "동대문지사", "기타지사"])
+        branch_in = st.selectbox("지사명 선택", BRANCHES)
     with c4:
-        car_in = st.text_input("차량번호", placeholder="경기 안양 아 7027")
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT car_no FROM vehicles WHERE branch_name = ? ORDER BY car_no", (branch_in,))
+            registered_cars = [r[0] for r in c.fetchall()]
+
+        if registered_cars:
+            car_choice = st.selectbox("차량번호 선택", registered_cars + [DIRECT_INPUT_LABEL], key="car_choice_select")
+        else:
+            car_choice = DIRECT_INPUT_LABEL
+
+        if car_choice == DIRECT_INPUT_LABEL:
+            car_in = st.text_input("차량번호 직접 입력", placeholder="경기 안양 아 7027", key="car_in_manual")
+        else:
+            car_in = car_choice
 
     st.divider()
 
@@ -171,10 +189,61 @@ elif active_menu == "관리자 종합 조회/출력":
     u = st.session_state.auth_user
     st.title(f"차량 안전관리 상태 종합 대장 ({u['role']}: {u['name']})")
 
+    with st.expander("🚗 차량 등록 관리 (현장 등록 화면 드롭다운 목록)", expanded=False):
+        veh_branch_options = BRANCHES if u["role"] == "본부" else [u["branch"]]
+
+        vc1, vc2, vc3 = st.columns([2, 3, 1])
+        with vc1:
+            veh_branch_in = st.selectbox(
+                "지사", veh_branch_options, key="veh_branch_in",
+                disabled=(len(veh_branch_options) == 1)
+            )
+        with vc2:
+            veh_car_no_in = st.text_input("등록할 차량번호", placeholder="경기 안양 아 7027", key="veh_car_no_in")
+        with vc3:
+            st.write("")
+            st.write("")
+            if st.button("등록", use_container_width=True, key="veh_register_btn"):
+                if not veh_car_no_in.strip():
+                    st.error("차량번호를 입력해주세요.")
+                else:
+                    try:
+                        with get_db() as conn:
+                            conn.execute(
+                                "INSERT INTO vehicles (created_at, hq_name, branch_name, car_no) VALUES (?, ?, ?, ?)",
+                                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), HQ_NAME, veh_branch_in, veh_car_no_in.strip())
+                            )
+                        st.success(f"[{veh_branch_in}] {veh_car_no_in.strip()} 등록 완료.")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("이미 등록된 차량번호입니다.")
+
+        with get_db() as conn:
+            c = conn.cursor()
+            if u["role"] == "본부":
+                c.execute("SELECT id, branch_name, car_no FROM vehicles ORDER BY branch_name, car_no")
+            else:
+                c.execute("SELECT id, branch_name, car_no FROM vehicles WHERE branch_name = ? ORDER BY car_no", (u["branch"],))
+            veh_rows = c.fetchall()
+
+        if veh_rows:
+            st.caption(f"등록된 차량 {len(veh_rows)}건 (현장 등록 화면에서 지사 선택 시 드롭다운으로 표시됩니다)")
+            for vid, vbranch, vcarno in veh_rows:
+                dcol1, dcol2 = st.columns([5, 1])
+                with dcol1:
+                    st.write(f"[{vbranch}] {vcarno}")
+                with dcol2:
+                    if st.button("삭제", key=f"veh_del_{vid}", use_container_width=True):
+                        with get_db() as conn:
+                            conn.execute("DELETE FROM vehicles WHERE id = ?", (vid,))
+                        st.rerun()
+        else:
+            st.caption("등록된 차량이 없습니다. 등록 전까지 현장 등록 화면은 차량번호 직접 입력으로 동작합니다.")
+
     with get_db() as conn:
         c = conn.cursor()
         if u["role"] == "본부":
-            sel_branch = st.selectbox("지사 필터", ["전체", "중앙지사", "강북지사", "서대문지사", "동대문지사", "기타지사"])
+            sel_branch = st.selectbox("지사 필터", ["전체"] + BRANCHES)
             if sel_branch != "전체":
                 c.execute("SELECT id, created_at, inspect_date, inspector, hq_name, branch_name, car_no, accumulated_km FROM integrated_inspections WHERE branch_name = ? ORDER BY id DESC", (sel_branch,))
             else:

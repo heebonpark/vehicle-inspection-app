@@ -8,6 +8,18 @@ from PIL import Image
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.drawing.image import Image as OpenPyxlImage
+from openpyxl.worksheet.page import PageMargins
+from openpyxl.worksheet.properties import PageSetupProperties
+
+
+def _apply_a4_print_setup(ws, orientation="portrait"):
+    """다운로드한 엑셀을 그대로 인쇄해도 A4 용지 너비에 자동으로 맞춰지도록 설정한다."""
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = orientation
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.page_margins = PageMargins(left=0.35, right=0.35, top=0.5, bottom=0.5, header=0.2, footer=0.2)
 
 # PDF
 from reportlab.lib.pagesizes import A4
@@ -132,10 +144,12 @@ def generate_integrated_excel(row_data):
     ws1 = wb.active
     ws1.title = "안전관리_점검표"
     ws1.views.sheetView[0].showGridLines = True
-    
+    _apply_a4_print_setup(ws1, orientation="portrait")
+
     # [Sheet 2] 차량 4면 사진 평가
     ws2 = wb.create_sheet(title="4면_사진평가")
     ws2.views.sheetView[0].showGridLines = True
+    _apply_a4_print_setup(ws2, orientation="landscape")
     
     # 얇은 테두리
     thin_border = Border(
@@ -197,7 +211,7 @@ def generate_integrated_excel(row_data):
             if key == "item_km":
                 res_cell_val = f"km : {row_data.get('accumulated_km', '')}"
             else:
-                res_cell_val = f"[V] 적정   [ ] 정비필요" if res_val == "적정" else f"[ ] 적정   [V] 정비필요"
+                res_cell_val = "■ 적정   □ 정비필요" if res_val == "적정" else "□ 적정   ■ 정비필요"
             
             ws1.cell(row=cur_r, column=4, value=res_cell_val).alignment = Alignment(horizontal="center", vertical="center")
             
@@ -320,7 +334,7 @@ def generate_integrated_pdf(row_data):
             if key == "item_km":
                 res_txt = f"km : {row_data.get('accumulated_km', '')}"
             else:
-                res_txt = "√ 적정  □ 정비필요" if res_val == "적정" else "□ 적정  √ 정비필요"
+                res_txt = "■ 적정  □ 정비필요" if res_val == "적정" else "□ 적정  ■ 정비필요"
 
             table_data.append([
                 Paragraph(f"<b>{sec['category']}</b>", tbl_font_center),

@@ -35,3 +35,12 @@ def init_db():
                 img_left BLOB
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vehicles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                hq_name TEXT,
+                branch_name TEXT,
+                car_no TEXT UNIQUE
+            )
+        """)
