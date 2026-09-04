@@ -132,12 +132,18 @@ def compress_image_bytes(raw_bytes, max_dim=1600, quality=82):
     return out.getvalue()
 
 
-def _fit_image(raw_bytes, box_w, box_h):
-    """원본 종횡비를 유지한 채 box_w x box_h 흰 배경 캔버스 중앙에 맞춰 넣는다."""
+def _fit_image(raw_bytes, box_w, box_h, scale=3):
+    """원본 종횡비를 유지한 채 box_w x box_h 흰 배경 캔버스 중앙에 맞춰 넣는다.
+
+    문서에는 항상 box_w x box_h 크기로 배치되지만, 실제 래스터는 scale배 더
+    높은 해상도로 만든다. box_w/box_h(포인트)를 그대로 픽셀 수로 써버리면
+    등록증처럼 글씨가 많은 사진은 확대하거나 인쇄했을 때 흐릿하게 깨진다.
+    """
+    hi_w, hi_h = box_w * scale, box_h * scale
     im = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-    im.thumbnail((box_w, box_h), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", (box_w, box_h), "white")
-    canvas.paste(im, ((box_w - im.width) // 2, (box_h - im.height) // 2))
+    im.thumbnail((hi_w, hi_h), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (hi_w, hi_h), "white")
+    canvas.paste(im, ((hi_w - im.width) // 2, (hi_h - im.height) // 2))
     return canvas
 
 
@@ -156,13 +162,13 @@ def _measure_height(flowable, avail_width):
     return flowable.wrap(avail_width, 20000)[1]
 
 
-def _balance_top_spacer(flowables, avail_width, avail_height):
-    """콘텐츠가 페이지 하단에 큰 공백을 남기고 위쪽에 붙어버리는 것을 막기 위해,
-    실제 콘텐츠 높이를 측정해 남는 공간의 절반을 상단 여백으로 얹어 위/아래
-    여백 비율을 맞춘다."""
+def _balance_top_spacer(flowables, avail_width, avail_height, top_ratio=0.28):
+    """콘텐츠가 페이지 맨 위에 완전히 붙어버리는 것은 막되, 상단 여백이 과하게
+    커지지 않도록 남는 공간의 일부(top_ratio)만 상단에 배분하고 나머지는
+    하단에 남긴다."""
     content_height = sum(_measure_height(f, avail_width) for f in flowables)
     leftover = avail_height - content_height
-    top_pad = max(leftover, 0) / 2
+    top_pad = max(leftover, 0) * top_ratio
     return Spacer(1, top_pad)
 
 
@@ -240,10 +246,10 @@ def _write_checklist_sheet(ws1, row_data):
         ws1[c].font = Font(name="맑은 고딕", size=11, bold=True)
     ws1.row_dimensions[4].height = 24
 
-    # 표 헤더
+    # 표 헤더 ("점검부분"이 구분+세부항목 두 칸을 함께 아우르도록 병합)
+    ws1.merge_cells("A5:B5")
     ws1["A5"] = "점 검 부 분"
-    ws1.merge_cells("B5:C5")
-    ws1["B5"] = "점    검    내    용"
+    ws1["C5"] = "점    검    내    용"
     ws1["D5"] = "결 과"
     for col_l in ["A5", "B5", "C5", "D5"]:
         ws1[col_l].font = Font(name="맑은 고딕", size=10, bold=True)
@@ -304,27 +310,29 @@ def _write_checklist_sheet(ws1, row_data):
         ws1.merge_cells(start_row=sec_start, start_column=1, end_row=sec_end, end_column=1)
         ws1.cell(row=sec_start, column=1, value=cat_name).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    # 하단 점검일시 및 점검자 서명란 (가운데 정렬 + 폰트 확대, 실제 서명 이미지가 있으면 함께 삽입)
+    # 하단 점검일시 및 점검자 서명란 (가운데 정렬 + 폰트 확대). 실제 서명 이미지가 있으면
+    # 원본 양식처럼 "점검자 : 이름 (서명)" 줄 바로 위에 서명을 배치한다.
     cur_r += 1
     ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
     c1 = ws1.cell(row=cur_r, column=1, value=f"점검일시 :  {row_data.get('inspect_date', '')}")
     c1.font = Font(name="맑은 고딕", size=13, bold=True)
     c1.alignment = Alignment(horizontal="center", vertical="center")
 
-    cur_r += 1
-    ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
-    c2 = ws1.cell(row=cur_r, column=1, value=f"점 검 자 :  {row_data.get('inspector', '')}")
-    c2.font = Font(name="맑은 고딕", size=13, bold=True)
-    c2.alignment = Alignment(horizontal="center", vertical="center")
-
     sig_bytes = row_data.get("signature_image")
     if sig_bytes:
         cur_r += 1
-        ws1.row_dimensions[cur_r].height = 45
+        ws1.row_dimensions[cur_r].height = 48
         ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
         sig_img = OpenPyxlImage(io.BytesIO(sig_bytes))
         sig_img.width, sig_img.height = 130, 52
         ws1.add_image(sig_img, f"C{cur_r}")
+
+    cur_r += 1
+    ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
+    inspector_label = f"점 검 자 :  {row_data.get('inspector', '')}" + (" (서명)" if sig_bytes else "")
+    c2 = ws1.cell(row=cur_r, column=1, value=inspector_label)
+    c2.font = Font(name="맑은 고딕", size=13, bold=True)
+    c2.alignment = Alignment(horizontal="center", vertical="center")
 
 
 def _write_photo_sheet(ws2, row_data):
@@ -375,7 +383,11 @@ def _write_photo_sheet(ws2, row_data):
             tmp_io = io.BytesIO()
             im.save(tmp_io, format="PNG")
             tmp_io.seek(0)
-            ws2.add_image(OpenPyxlImage(tmp_io), pos)
+            oxl_img = OpenPyxlImage(tmp_io)
+            # _fit_image가 고화질을 위해 실제 픽셀 수를 키우므로, 시트에는 항상
+            # 원래 칸 크기(310x270)로 고정 표시되도록 명시한다.
+            oxl_img.width, oxl_img.height = 310, 270
+            ws2.add_image(oxl_img, pos)
 
 
 @st.cache_data(show_spinner=False)
@@ -452,14 +464,15 @@ def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
     table_data = [
         [
             Paragraph("<b>점검부분</b>", tbl_font_center),
-            Paragraph("<b>점  검  내  용</b>", tbl_font_center),
             "",
+            Paragraph("<b>점  검  내  용</b>", tbl_font_center),
             Paragraph("<b>결 과</b>", tbl_font_center)
         ]
     ]
 
     check_dict = json.loads(row_data.get("check_data", "{}"))
-    spans = [('SPAN', (1, 0), (2, 0))]
+    # 헤더의 "점검부분"이 구분(0열)+세부항목(1열) 두 칸을 함께 아우르도록 병합
+    spans = [('SPAN', (0, 0), (1, 0))]
     na_row_styles = []
     cur_idx = 1
 
@@ -513,18 +526,20 @@ def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ] + spans + na_row_styles))
 
-    # 점검일시/점검자는 가운데 정렬 + 폰트 확대. 실제 서명 이미지가 있으면 이름 아래에 함께 표시한다.
+    # 점검일시/점검자는 가운데 정렬 + 폰트 확대. 실제 서명 이미지가 있으면 원본 양식처럼
+    # "점검자 : 이름 (서명)" 줄 바로 위에 서명을 배치한다.
+    sig_bytes = row_data.get("signature_image")
+    inspector_label = f"점검자 :  {row_data.get('inspector', '')}" + (" (서명)" if sig_bytes else "")
     sign_block = [
         Paragraph(f"점검일시 :  {row_data.get('inspect_date', '')}", sign_style),
-        Spacer(1, 4),
-        Paragraph(f"점검자 :  {row_data.get('inspector', '')}", sign_style),
+        Spacer(1, 6),
     ]
-    sig_bytes = row_data.get("signature_image")
     if sig_bytes:
-        sig_img = ReportLabImage(io.BytesIO(sig_bytes), width=110, height=44)
+        sig_img = ReportLabImage(io.BytesIO(sig_bytes), width=120, height=48)
         sig_img.hAlign = 'CENTER'
-        sign_block.append(Spacer(1, 4))
         sign_block.append(sig_img)
+        sign_block.append(Spacer(1, 2))
+    sign_block.append(Paragraph(inspector_label, sign_style))
 
     page1_flowables = [title1, meta_p1, Spacer(1, 8), p1_table, Spacer(1, 12)] + sign_block
     balance1 = _balance_top_spacer(page1_flowables, doc_width, doc_height)
