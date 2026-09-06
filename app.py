@@ -46,6 +46,27 @@ def _signature_png_bytes(canvas_result):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
+
+@st.dialog("점검 기록 삭제 확인")
+def confirm_delete_inspections(ids, labels):
+    st.warning(f"⚠️ {len(ids)}건을 삭제합니다. 사진·서명 이미지를 포함해 영구적으로 삭제되며 되돌릴 수 없습니다.")
+    for label in labels[:15]:
+        st.write(f"- {label}")
+    if len(labels) > 15:
+        st.caption(f"...외 {len(labels) - 15}건")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("취소", use_container_width=True, key="del_cancel_btn"):
+            st.rerun()
+    with c2:
+        if st.button("영구 삭제", type="primary", use_container_width=True, key="del_confirm_btn"):
+            with get_db() as conn:
+                placeholders = ",".join("?" * len(ids))
+                conn.execute(f"DELETE FROM integrated_inspections WHERE id IN ({placeholders})", ids)
+            st.session_state["_delete_success_count"] = len(ids)
+            st.rerun()
+
+
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -346,6 +367,9 @@ elif active_menu == "관리자 종합 조회/출력":
     u = st.session_state.auth_user
     st.title(f"차량 안전관리 상태 종합 대장 ({u['role']}: {u['name']})")
 
+    if "_delete_success_count" in st.session_state:
+        st.success(f"🗑️ {st.session_state.pop('_delete_success_count')}건 삭제되었습니다.")
+
     with st.expander("🔑 비밀번호 변경", expanded=False):
         st.caption(f"현재 계정: {u['name']} ({u['id']})")
         pc1, pc2, pc3 = st.columns(3)
@@ -455,10 +479,15 @@ elif active_menu == "관리자 종합 조회/출력":
             c.execute("SELECT id, created_at, inspect_date, inspector, hq_name, branch_name, car_no, accumulated_km FROM integrated_inspections WHERE branch_name = ? ORDER BY id DESC", (sel_branch,))
         rows = c.fetchall()
 
+    search_q = st.text_input("🔍 차량번호 또는 점검자 검색", placeholder="예: 안양 또는 홍길동", key="admin_search_q")
+    if search_q:
+        q = search_q.strip().lower()
+        rows = [r for r in rows if q in (r[6] or "").lower() or q in (r[3] or "").lower()]
+
     if not rows:
-        st.warning("등록된 점검 내역이 없습니다.")
+        st.warning("검색 결과가 없습니다." if search_q else "등록된 점검 내역이 없습니다.")
     else:
-        st.caption("행을 클릭해 여러 건을 선택하면 아래에 일괄 다운로드 옵션이 나타납니다.")
+        st.caption(f"총 {len(rows)}건 — 행을 클릭해 여러 건을 선택하면 아래에 일괄 다운로드/삭제 옵션이 나타납니다.")
         select_event = st.dataframe(
             [{"번호": r[0], "등록일시": r[1], "점검일자": r[2], "점검자": r[3], "지사": r[5], "차량번호": r[6], "누적km": r[7]} for r in rows],
             use_container_width=True,
@@ -482,8 +511,8 @@ elif active_menu == "관리자 종합 조회/출력":
             # 화면에 표시된 순서(선택한 순서가 아니라 목록 순서)대로 정렬
             batch_recs = [batch_by_id[i] for i in selected_ids if i in batch_by_id]
 
-            st.success(f"✅ {len(batch_recs)}건 선택됨 — 아래에서 한 번에 내려받을 수 있습니다.")
-            bb1, bb2 = st.columns(2)
+            st.success(f"✅ {len(batch_recs)}건 선택됨 — 아래에서 한 번에 내려받거나 삭제할 수 있습니다.")
+            bb1, bb2, bb3 = st.columns(3)
             with bb1:
                 batch_xlsx = generate_batch_excel(batch_recs)
                 st.download_button(
@@ -504,6 +533,10 @@ elif active_menu == "관리자 종합 조회/출력":
                     use_container_width=True,
                     key="batch_pdf_dl",
                 )
+            with bb3:
+                if st.button(f"🗑️ 선택 {len(batch_recs)}건 삭제", use_container_width=True, key="batch_delete_btn"):
+                    labels = [f"[{r['branch_name']}] {r['car_no']} (점검자: {r['inspector']})" for r in batch_recs]
+                    confirm_delete_inspections(selected_ids, labels)
 
         st.divider()
         st.subheader("2세트 원본 양식 보고서 다운로드 (건별)")
@@ -522,7 +555,7 @@ elif active_menu == "관리자 종합 조회/출력":
         if rec:
             rec_data = row_to_inspection_dict(rec)
 
-            d_col1, d_col2 = st.columns(2)
+            d_col1, d_col2, d_col3 = st.columns(3)
             with d_col1:
                 excel_bytes = generate_integrated_excel(rec_data)
                 st.download_button(
@@ -541,6 +574,10 @@ elif active_menu == "관리자 종합 조회/출력":
                     mime="application/pdf",
                     use_container_width=True
                 )
+            with d_col3:
+                if st.button("🗑️ 이 건 삭제", use_container_width=True, key="single_delete_btn"):
+                    label = f"[{rec_data['branch_name']}] {rec_data['car_no']} (점검자: {rec_data['inspector']})"
+                    confirm_delete_inspections([rec_data["id"]], [label])
 
             # 웹 화면 미리보기
             with st.expander("현장 등록 사진 미리보기", expanded=True):
