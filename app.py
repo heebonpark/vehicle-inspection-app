@@ -6,6 +6,7 @@ import os
 import io
 import sqlite3
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
@@ -44,6 +45,15 @@ def _signature_png_bytes(canvas_result):
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def now_kst():
+    """Streamlit Cloud 서버는 UTC 등 다른 시간대에서 돌 수 있으므로,
+    등록일시는 항상 한국 표준시(KST) 기준으로 기록한다."""
+    return datetime.now(KST)
+
 
 HQ_NAME = "강북/강원본부"
 BRANCHES = ["중앙지사", "강북지사", "서대문지사", "고양지사", "의정부지사", "남양주지사", "강릉지사", "원주지사", "춘천고객지원팀"]
@@ -321,8 +331,8 @@ if active_menu == "현장 점검 등록 (체크리스트 + 4면촬영)":
                         img_front, img_rear, img_right, img_left
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    datetime.now().strftime("%y. %m. %d"),
+                    now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+                    now_kst().strftime("%y. %m. %d"),
                     inspector_in, hq_in, branch_in, car_in,
                     json.dumps(collected_checks, ensure_ascii=False),
                     km_clean, inspector_in, sig_bytes,
@@ -402,7 +412,7 @@ elif active_menu == "관리자 종합 조회/출력":
                         with get_db() as conn:
                             conn.execute(
                                 "INSERT INTO vehicles (created_at, hq_name, branch_name, car_no) VALUES (?, ?, ?, ?)",
-                                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), HQ_NAME, veh_branch_in, veh_car_no_in.strip())
+                                (now_kst().strftime("%Y-%m-%d %H:%M:%S"), HQ_NAME, veh_branch_in, veh_car_no_in.strip())
                             )
                         st.success(f"[{veh_branch_in}] {veh_car_no_in.strip()} 등록 완료.")
                         st.rerun()
