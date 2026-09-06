@@ -310,8 +310,9 @@ def _write_checklist_sheet(ws1, row_data):
         ws1.merge_cells(start_row=sec_start, start_column=1, end_row=sec_end, end_column=1)
         ws1.cell(row=sec_start, column=1, value=cat_name).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    # 하단 점검일시 및 점검자 서명란 (가운데 정렬 + 폰트 확대). 실제 서명 이미지가 있으면
-    # 원본 양식처럼 "점검자 : 이름 (서명)" 줄 바로 위에 서명을 배치한다.
+    # 하단 점검일시 및 점검자 서명란 (가운데 정렬 + 폰트 확대). 점검자 줄은 "이름"(A~C, 오른쪽
+    # 정렬)과 "(서명)"(D~E, 가운데 정렬) 두 칸으로 나눠, 서명 이미지가 정확히 "(서명)"
+    # 칸 바로 위에 오도록 한다(전체 폭 기준으로 각각 가운데 정렬하면 어긋나 보인다).
     cur_r += 1
     ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
     c1 = ws1.cell(row=cur_r, column=1, value=f"점검일시 :  {row_data.get('inspect_date', '')}")
@@ -321,18 +322,22 @@ def _write_checklist_sheet(ws1, row_data):
     sig_bytes = row_data.get("signature_image")
     if sig_bytes:
         cur_r += 1
-        ws1.row_dimensions[cur_r].height = 48
-        ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
+        ws1.row_dimensions[cur_r].height = 30
+        # 크기: "(서명)" 글자(13pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게
         sig_img = OpenPyxlImage(io.BytesIO(sig_bytes))
-        sig_img.width, sig_img.height = 130, 52
-        ws1.add_image(sig_img, f"C{cur_r}")
+        sig_img.width, sig_img.height = 72, 29
+        ws1.add_image(sig_img, f"D{cur_r}")
 
     cur_r += 1
-    ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
-    inspector_label = f"점 검 자 :  {row_data.get('inspector', '')}" + (" (서명)" if sig_bytes else "")
-    c2 = ws1.cell(row=cur_r, column=1, value=inspector_label)
-    c2.font = Font(name="맑은 고딕", size=13, bold=True)
-    c2.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=3)
+    name_cell = ws1.cell(row=cur_r, column=1, value=f"점 검 자 :  {row_data.get('inspector', '')}")
+    name_cell.font = Font(name="맑은 고딕", size=13, bold=True)
+    name_cell.alignment = Alignment(horizontal="right", vertical="center")
+
+    ws1.merge_cells(start_row=cur_r, start_column=4, end_row=cur_r, end_column=5)
+    label_cell = ws1.cell(row=cur_r, column=4, value="(서명)" if sig_bytes else "")
+    label_cell.font = Font(name="맑은 고딕", size=13, bold=True)
+    label_cell.alignment = Alignment(horizontal="center", vertical="center")
 
 
 def _write_photo_sheet(ws2, row_data):
@@ -440,6 +445,8 @@ def _build_pdf_styles():
         "tbl": ParagraphStyle(name="TB", fontName=FONT_NAME, fontSize=8, leading=12.5),
         "tbl_center": ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8.5, leading=12.5, alignment=1),
         "sign": ParagraphStyle(name="SIGN", fontName=FONT_NAME, fontSize=12, alignment=1, leading=19),
+        "sign_name": ParagraphStyle(name="SIGN_NAME", fontName=FONT_NAME, fontSize=12, alignment=2, leading=19),
+        "sign_label": ParagraphStyle(name="SIGN_LABEL", fontName=FONT_NAME, fontSize=12, alignment=1, leading=14),
     }
 
 
@@ -526,20 +533,37 @@ def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ] + spans + na_row_styles))
 
-    # 점검일시/점검자는 가운데 정렬 + 폰트 확대. 실제 서명 이미지가 있으면 원본 양식처럼
-    # "점검자 : 이름 (서명)" 줄 바로 위에 서명을 배치한다.
+    # 점검일시는 가운데 정렬 + 폰트 확대. 점검자 줄은 "이름"과 "(서명)"을 좌우 두 칸으로
+    # 나눠, 서명 이미지가 정확히 "(서명)" 글자 바로 위(같은 칸 안)에 오도록 만든다.
+    # (전체 폭 기준으로 각각 따로 가운데 정렬하면 문장 속 "(서명)" 위치와 어긋나 보인다.)
     sig_bytes = row_data.get("signature_image")
-    inspector_label = f"점검자 :  {row_data.get('inspector', '')}" + (" (서명)" if sig_bytes else "")
+    sign_name_style = styles["sign_name"]
+    sign_label_style = styles["sign_label"]
+    name_para = Paragraph(f"점검자 :  {row_data.get('inspector', '')}", sign_name_style)
+
+    if sig_bytes:
+        # 크기: "(서명)" 글자(12pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게
+        sig_img = ReportLabImage(io.BytesIO(sig_bytes), width=72, height=29)
+        label_cell = [sig_img, Paragraph("(서명)", sign_label_style)]
+    else:
+        label_cell = Paragraph("", sign_label_style)
+
+    sign_row_table = Table([[name_para, label_cell]], colWidths=[doc_width * 0.62, doc_width * 0.38])
+    sign_row_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, 0), 'RIGHT'),
+        ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+    ]))
+
     sign_block = [
         Paragraph(f"점검일시 :  {row_data.get('inspect_date', '')}", sign_style),
-        Spacer(1, 6),
+        Spacer(1, 8),
+        sign_row_table,
     ]
-    if sig_bytes:
-        sig_img = ReportLabImage(io.BytesIO(sig_bytes), width=120, height=48)
-        sig_img.hAlign = 'CENTER'
-        sign_block.append(sig_img)
-        sign_block.append(Spacer(1, 2))
-    sign_block.append(Paragraph(inspector_label, sign_style))
 
     page1_flowables = [title1, meta_p1, Spacer(1, 8), p1_table, Spacer(1, 12)] + sign_block
     balance1 = _balance_top_spacer(page1_flowables, doc_width, doc_height)
