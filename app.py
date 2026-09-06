@@ -40,8 +40,22 @@ def _has_signature(canvas_result, min_dark_pixels=30):
 
 
 def _signature_png_bytes(canvas_result):
+    """서명 캔버스 전체(빈 여백 포함)를 그대로 저장하면, 사용자가 캔버스 어느
+    한쪽에 치우쳐 서명했을 때 보고서에서 "(서명)" 칸 가운데에 놓아도 실제
+    글씨는 이미지 프레임 안에서 치우쳐 보인다. 그려진 잉크의 바운딩박스만
+    잘라내어, 어디에 배치하든 서명 자체가 프레임 정중앙에 오도록 한다."""
     arr = canvas_result.image_data.astype("uint8")
-    img = Image.fromarray(arr, "RGBA")
+    img = Image.fromarray(arr, "RGBA").convert("RGB")
+
+    ink_mask = img.convert("L").point(lambda p: 255 if p < 200 else 0)
+    bbox = ink_mask.getbbox()
+    if bbox:
+        pad = 8
+        left, top, right, bottom = bbox
+        left, top = max(0, left - pad), max(0, top - pad)
+        right, bottom = min(img.width, right + pad), min(img.height, bottom + pad)
+        img = img.crop((left, top, right, bottom))
+
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()

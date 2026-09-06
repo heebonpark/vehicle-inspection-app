@@ -323,8 +323,14 @@ def _write_checklist_sheet(ws1, row_data):
     if sig_bytes:
         cur_r += 1
         ws1.row_dimensions[cur_r].height = 30
-        # 크기: "(서명)" 글자(13pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게
-        sig_img = OpenPyxlImage(io.BytesIO(sig_bytes))
+        # 크기: "(서명)" 글자(13pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게.
+        # 서명은 사람마다 가로세로 비율이 다르므로 _fit_image로 비율을 유지한 채
+        # 정확히 이 크기의 흰 배경 캔버스 정중앙에 맞춰(찌그러짐 없이) 넣는다.
+        fitted_sig = _fit_image(sig_bytes, 72, 29, scale=2)
+        sig_tmp = io.BytesIO()
+        fitted_sig.save(sig_tmp, format="PNG")
+        sig_tmp.seek(0)
+        sig_img = OpenPyxlImage(sig_tmp)
         sig_img.width, sig_img.height = 72, 29
         ws1.add_image(sig_img, f"D{cur_r}")
 
@@ -542,8 +548,14 @@ def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
     name_para = Paragraph(f"점검자 :  {row_data.get('inspector', '')}", sign_name_style)
 
     if sig_bytes:
-        # 크기: "(서명)" 글자(12pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게
-        sig_img = ReportLabImage(io.BytesIO(sig_bytes), width=72, height=29)
+        # 크기: "(서명)" 글자(12pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게.
+        # 서명은 사람마다 가로세로 비율이 다르므로 _fit_image로 비율을 유지한 채
+        # 정확히 이 크기의 흰 배경 캔버스 정중앙에 맞춰(찌그러짐 없이) 넣는다.
+        fitted_sig = _fit_image(sig_bytes, 72, 29, scale=2)
+        sig_tmp = io.BytesIO()
+        fitted_sig.save(sig_tmp, format="PNG")
+        sig_tmp.seek(0)
+        sig_img = ReportLabImage(sig_tmp, width=72, height=29)
         label_cell = [sig_img, Paragraph("(서명)", sign_label_style)]
     else:
         label_cell = Paragraph("", sign_label_style)
