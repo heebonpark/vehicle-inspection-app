@@ -43,7 +43,10 @@ def _signature_png_bytes(canvas_result):
     """서명 캔버스 전체(빈 여백 포함)를 그대로 저장하면, 사용자가 캔버스 어느
     한쪽에 치우쳐 서명했을 때 보고서에서 "(서명)" 칸 가운데에 놓아도 실제
     글씨는 이미지 프레임 안에서 치우쳐 보인다. 그려진 잉크의 바운딩박스만
-    잘라내어, 어디에 배치하든 서명 자체가 프레임 정중앙에 오도록 한다."""
+    잘라내어, 어디에 배치하든 서명 자체가 프레임 정중앙에 오도록 한다.
+
+    또한 흰 배경을 투명하게 바꿔서(밝을수록 투명, 잉크는 불투명) 보고서에서
+    "(서명)" 글자 위에 겹쳐 놓아도 그 글자가 서명 아래로 비쳐 보이게 한다."""
     arr = canvas_result.image_data.astype("uint8")
     img = Image.fromarray(arr, "RGBA").convert("RGB")
 
@@ -56,8 +59,12 @@ def _signature_png_bytes(canvas_result):
         right, bottom = min(img.width, right + pad), min(img.height, bottom + pad)
         img = img.crop((left, top, right, bottom))
 
+    img_rgba = img.convert("RGBA")
+    alpha = img_rgba.convert("L").point(lambda p: 255 - p)
+    img_rgba.putalpha(alpha)
+
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img_rgba.save(buf, format="PNG")
     return buf.getvalue()
 
 

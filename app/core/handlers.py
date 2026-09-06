@@ -27,7 +27,8 @@ def _apply_a4_print_setup(ws, orientation="portrait"):
 
 # PDF
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Image as ReportLabImage, Spacer, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Image as ReportLabImage, Spacer, PageBreak, Flowable
+from reportlab.lib.utils import ImageReader
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
@@ -145,6 +146,42 @@ def _fit_image(raw_bytes, box_w, box_h, scale=3):
     canvas = Image.new("RGB", (hi_w, hi_h), "white")
     canvas.paste(im, ((hi_w - im.width) // 2, (hi_h - im.height) // 2))
     return canvas
+
+
+def _fit_signature(raw_bytes, box_w, box_h, scale=3):
+    """서명을 box_w x box_h 안에 비율을 유지한 채 중앙 정렬하되, 사진용 _fit_image와
+    달리 흰 배경이 아니라 완전 투명 배경으로 만든다. 이렇게 해야 "(서명)" 글자 위에
+    겹쳐 놓았을 때 서명이 없는 빈 공간으로 글자가 비쳐 보인다."""
+    hi_w, hi_h = box_w * scale, box_h * scale
+    im = Image.open(io.BytesIO(raw_bytes)).convert("RGBA")
+    im.thumbnail((hi_w, hi_h), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (hi_w, hi_h), (0, 0, 0, 0))
+    canvas.paste(im, ((hi_w - im.width) // 2, (hi_h - im.height) // 2), im)
+    return canvas
+
+
+class _SignatureOverlay(Flowable):
+    """'(서명)' 글자 위에 실제 서명(투명 배경)을 겹쳐서 그린다."""
+
+    def __init__(self, width, height, label, font_name, font_size, sig_bytes=None):
+        Flowable.__init__(self)
+        self.width = width
+        self.height = height
+        self.label = label
+        self.font_name = font_name
+        self.font_size = font_size
+        self.sig_bytes = sig_bytes
+
+    def wrap(self, avail_width, avail_height):
+        return (self.width, self.height)
+
+    def draw(self):
+        c = self.canv
+        c.setFont(self.font_name, self.font_size)
+        c.drawCentredString(self.width / 2, (self.height - self.font_size) / 2 + 1, self.label)
+        if self.sig_bytes:
+            fitted = _fit_signature(self.sig_bytes, int(self.width), int(self.height))
+            c.drawImage(ImageReader(fitted), 0, 0, width=self.width, height=self.height, mask='auto')
 
 
 def _na_result_drawing(width=90, height=14):
@@ -311,39 +348,37 @@ def _write_checklist_sheet(ws1, row_data):
         ws1.cell(row=sec_start, column=1, value=cat_name).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     # 하단 점검일시 및 점검자 서명란 (가운데 정렬 + 폰트 확대). 점검자 줄은 "이름"(A~C, 오른쪽
-    # 정렬)과 "(서명)"(D~E, 가운데 정렬) 두 칸으로 나눠, 서명 이미지가 정확히 "(서명)"
-    # 칸 바로 위에 오도록 한다(전체 폭 기준으로 각각 가운데 정렬하면 어긋나 보인다).
+    # 정렬)과 "(서명)"(D~E, 가운데 정렬) 두 칸으로 나눈다. 실제 서명이 있으면 투명 배경으로
+    # 만들어 "(서명)" 글자와 같은 칸 위에 그대로 겹쳐서 띄운다(엑셀 도형은 셀 내용 위에
+    # 항상 떠 있으므로, 같은 위치에 앵커하면 자연스럽게 겹쳐 보인다).
     cur_r += 1
     ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=5)
     c1 = ws1.cell(row=cur_r, column=1, value=f"점검일시 :  {row_data.get('inspect_date', '')}")
     c1.font = Font(name="맑은 고딕", size=13, bold=True)
     c1.alignment = Alignment(horizontal="center", vertical="center")
 
-    sig_bytes = row_data.get("signature_image")
-    if sig_bytes:
-        cur_r += 1
-        ws1.row_dimensions[cur_r].height = 30
-        # 크기: "(서명)" 글자(13pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게.
-        # 서명은 사람마다 가로세로 비율이 다르므로 _fit_image로 비율을 유지한 채
-        # 정확히 이 크기의 흰 배경 캔버스 정중앙에 맞춰(찌그러짐 없이) 넣는다.
-        fitted_sig = _fit_image(sig_bytes, 72, 29, scale=2)
-        sig_tmp = io.BytesIO()
-        fitted_sig.save(sig_tmp, format="PNG")
-        sig_tmp.seek(0)
-        sig_img = OpenPyxlImage(sig_tmp)
-        sig_img.width, sig_img.height = 72, 29
-        ws1.add_image(sig_img, f"D{cur_r}")
-
     cur_r += 1
+    ws1.row_dimensions[cur_r].height = 30
     ws1.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=3)
     name_cell = ws1.cell(row=cur_r, column=1, value=f"점 검 자 :  {row_data.get('inspector', '')}")
     name_cell.font = Font(name="맑은 고딕", size=13, bold=True)
     name_cell.alignment = Alignment(horizontal="right", vertical="center")
 
     ws1.merge_cells(start_row=cur_r, start_column=4, end_row=cur_r, end_column=5)
-    label_cell = ws1.cell(row=cur_r, column=4, value="(서명)" if sig_bytes else "")
+    label_cell = ws1.cell(row=cur_r, column=4, value="(서명)")
     label_cell.font = Font(name="맑은 고딕", size=13, bold=True)
     label_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    sig_bytes = row_data.get("signature_image")
+    if sig_bytes:
+        # 크기: "(서명)" 글자(13pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게.
+        fitted_sig = _fit_signature(sig_bytes, 72, 29)
+        sig_tmp = io.BytesIO()
+        fitted_sig.save(sig_tmp, format="PNG")
+        sig_tmp.seek(0)
+        sig_img = OpenPyxlImage(sig_tmp)
+        sig_img.width, sig_img.height = 72, 29
+        ws1.add_image(sig_img, f"D{cur_r}")
 
 
 def _write_photo_sheet(ws2, row_data):
@@ -452,7 +487,6 @@ def _build_pdf_styles():
         "tbl_center": ParagraphStyle(name="TBC", fontName=FONT_NAME, fontSize=8.5, leading=12.5, alignment=1),
         "sign": ParagraphStyle(name="SIGN", fontName=FONT_NAME, fontSize=12, alignment=1, leading=19),
         "sign_name": ParagraphStyle(name="SIGN_NAME", fontName=FONT_NAME, fontSize=12, alignment=2, leading=19),
-        "sign_label": ParagraphStyle(name="SIGN_LABEL", fontName=FONT_NAME, fontSize=12, alignment=1, leading=14),
     }
 
 
@@ -539,32 +573,19 @@ def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ] + spans + na_row_styles))
 
-    # 점검일시는 가운데 정렬 + 폰트 확대. 점검자 줄은 "이름"과 "(서명)"을 좌우 두 칸으로
-    # 나눠, 서명 이미지가 정확히 "(서명)" 글자 바로 위(같은 칸 안)에 오도록 만든다.
-    # (전체 폭 기준으로 각각 따로 가운데 정렬하면 문장 속 "(서명)" 위치와 어긋나 보인다.)
+    # 점검일시는 가운데 정렬 + 폰트 확대. 점검자 줄은 "이름"(왼쪽, 오른쪽 정렬)과
+    # "(서명)"(오른쪽 칸, 가운데 정렬) 두 칸으로 나누고, 실제 서명이 있으면 투명
+    # 배경으로 만들어 "(서명)" 글자 위에 그대로 겹쳐 그린다(실제 서명하듯이).
     sig_bytes = row_data.get("signature_image")
     sign_name_style = styles["sign_name"]
-    sign_label_style = styles["sign_label"]
     name_para = Paragraph(f"점검자 :  {row_data.get('inspector', '')}", sign_name_style)
-
-    if sig_bytes:
-        # 크기: "(서명)" 글자(12pt)보다 살짝 큰 정도 - 실제 서명처럼 자연스럽게, 너무 크지 않게.
-        # 서명은 사람마다 가로세로 비율이 다르므로 _fit_image로 비율을 유지한 채
-        # 정확히 이 크기의 흰 배경 캔버스 정중앙에 맞춰(찌그러짐 없이) 넣는다.
-        fitted_sig = _fit_image(sig_bytes, 72, 29, scale=2)
-        sig_tmp = io.BytesIO()
-        fitted_sig.save(sig_tmp, format="PNG")
-        sig_tmp.seek(0)
-        sig_img = ReportLabImage(sig_tmp, width=72, height=29)
-        label_cell = [sig_img, Paragraph("(서명)", sign_label_style)]
-    else:
-        label_cell = Paragraph("", sign_label_style)
+    label_cell = _SignatureOverlay(90, 32, "(서명)", FONT_NAME, 12, sig_bytes)
 
     sign_row_table = Table([[name_para, label_cell]], colWidths=[doc_width * 0.62, doc_width * 0.38])
     sign_row_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (0, 0), 'RIGHT'),
         ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
