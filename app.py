@@ -64,6 +64,9 @@ def confirm_delete_inspections(ids, labels):
                 placeholders = ",".join("?" * len(ids))
                 conn.execute(f"DELETE FROM integrated_inspections WHERE id IN ({placeholders})", ids)
             st.session_state["_delete_success_count"] = len(ids)
+            # 삭제로 목록이 줄어들면 남아있던 선택 상태가 이제 다른 행을
+            # 가리킬 수 있으므로 함께 비운다.
+            st.session_state.pop("admin_inspection_table", None)
             st.rerun()
 
 
@@ -488,6 +491,16 @@ elif active_menu == "관리자 종합 조회/출력":
         st.warning("검색 결과가 없습니다." if search_q else "등록된 점검 내역이 없습니다.")
     else:
         st.caption(f"총 {len(rows)}건 — 행을 클릭해 여러 건을 선택하면 아래에 일괄 다운로드/삭제 옵션이 나타납니다.")
+
+        # 지사 필터/검색어가 바뀌어 목록의 행 구성이 달라지면, 이전에 선택했던
+        # 행 번호가 새 목록에서는 다른 건을 가리키거나 범위를 벗어날 수 있다.
+        # (삭제 직후에도 목록이 줄어들면서 같은 문제가 생길 수 있다.)
+        # 필터가 바뀔 때마다 선택 상태를 비워 항상 안전하게 만든다.
+        filter_signature = (sel_branch, search_q)
+        if st.session_state.get("_admin_table_filter_sig") != filter_signature:
+            st.session_state.pop("admin_inspection_table", None)
+            st.session_state["_admin_table_filter_sig"] = filter_signature
+
         select_event = st.dataframe(
             [{"번호": r[0], "등록일시": r[1], "점검일자": r[2], "점검자": r[3], "지사": r[5], "차량번호": r[6], "누적km": r[7]} for r in rows],
             use_container_width=True,
@@ -496,7 +509,9 @@ elif active_menu == "관리자 종합 조회/출력":
             key="admin_inspection_table",
         )
 
-        selected_positions = list(select_event.selection.rows) if select_event and select_event.selection else []
+        raw_selected_positions = list(select_event.selection.rows) if select_event and select_event.selection else []
+        # 범위를 벗어난 인덱스가 남아있어도(삭제 직후 등) 에러 없이 무시한다.
+        selected_positions = [i for i in raw_selected_positions if 0 <= i < len(rows)]
         selected_ids = [rows[i][0] for i in selected_positions]
 
         if selected_ids:
