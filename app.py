@@ -115,20 +115,23 @@ def force_rear_camera():
     """, height=1)
 
 # 최초 1회(DB에 계정이 하나도 없을 때)만 자동 생성되는 기본 계정. 이후 비밀번호는
-# DB(users 테이블)에 저장되며 로그인 후 화면에서 변경 가능하다.
+# DB(users 테이블)에 저장되며 로그인 후 화면에서 변경 가능하다. 목록/로그인
+# 드롭다운도 이 배열 순서를 그대로 따른다(본부 -> 중앙 -> 강북 -> 서대문 -> 고양
+# -> 의정부 -> 남양주 -> 강릉 -> 원주 -> 춘천고객지원팀).
 DEFAULT_PASSWORD = "admin1234"
 DEFAULT_ACCOUNTS = [
-    {"id": "hq_admin", "name": "본부 총괄관리자", "role": "본부", "branch": "전체"},
-    {"id": "jungang_mgr", "name": "중앙지사 관리자", "role": "지사", "branch": "중앙지사"},
-    {"id": "gangbuk_mgr", "name": "강북지사 관리자", "role": "지사", "branch": "강북지사"},
-    {"id": "seodaemun_mgr", "name": "서대문지사 관리자", "role": "지사", "branch": "서대문지사"},
-    {"id": "goyang_mgr", "name": "고양지사 관리자", "role": "지사", "branch": "고양지사"},
-    {"id": "uijeongbu_mgr", "name": "의정부지사 관리자", "role": "지사", "branch": "의정부지사"},
-    {"id": "namyangju_mgr", "name": "남양주지사 관리자", "role": "지사", "branch": "남양주지사"},
-    {"id": "gangneung_mgr", "name": "강릉지사 관리자", "role": "지사", "branch": "강릉지사"},
-    {"id": "wonju_mgr", "name": "원주지사 관리자", "role": "지사", "branch": "원주지사"},
-    {"id": "chuncheon_mgr", "name": "춘천고객지원팀 관리자", "role": "지사", "branch": "춘천고객지원팀"},
+    {"id": "hq_admin", "name": "본부 총괄관리자", "role": "본부", "branch": "전체", "password": "admin1234+!"},
+    {"id": "jungang_mgr", "name": "중앙지사 관리자", "role": "지사", "branch": "중앙지사", "password": "중앙1234+!"},
+    {"id": "gangbuk_mgr", "name": "강북지사 관리자", "role": "지사", "branch": "강북지사", "password": "강북1234+!"},
+    {"id": "seodaemun_mgr", "name": "서대문지사 관리자", "role": "지사", "branch": "서대문지사", "password": "서대문1234+!"},
+    {"id": "goyang_mgr", "name": "고양지사 관리자", "role": "지사", "branch": "고양지사", "password": "고양1234+!"},
+    {"id": "uijeongbu_mgr", "name": "의정부지사 관리자", "role": "지사", "branch": "의정부지사", "password": "의정부1234+!"},
+    {"id": "namyangju_mgr", "name": "남양주지사 관리자", "role": "지사", "branch": "남양주지사", "password": "남양주1234+!"},
+    {"id": "gangneung_mgr", "name": "강릉지사 관리자", "role": "지사", "branch": "강릉지사", "password": "강릉1234+!"},
+    {"id": "wonju_mgr", "name": "원주지사 관리자", "role": "지사", "branch": "원주지사", "password": "원주1234+!"},
+    {"id": "chuncheon_mgr", "name": "춘천고객지원팀 관리자", "role": "지사", "branch": "춘천고객지원팀", "password": "춘천1234+!"},
 ]
+_ACCOUNT_ORDER = {acc["id"]: i for i, acc in enumerate(DEFAULT_ACCOUNTS)}
 
 # --- 1. 페이지 설정 및 폰트/스타일 세팅 ---
 st.set_page_config(page_title="이륜/업무용 차량 안전관리 종합시스템", layout="wide", initial_sidebar_state="expanded")
@@ -149,9 +152,10 @@ def seed_default_users():
         if c.fetchone()[0] == 0:
             for acc in DEFAULT_ACCOUNTS:
                 salt = os.urandom(16)
+                pw = acc.get("password", DEFAULT_PASSWORD)
                 conn.execute(
                     "INSERT INTO users (id, name, role, branch, salt, pw_hash) VALUES (?, ?, ?, ?, ?, ?)",
-                    (acc["id"], acc["name"], acc["role"], acc["branch"], salt.hex(), _hash_password(DEFAULT_PASSWORD, salt))
+                    (acc["id"], acc["name"], acc["role"], acc["branch"], salt.hex(), _hash_password(pw, salt))
                 )
 
 
@@ -161,8 +165,11 @@ seed_default_users()
 def list_users():
     with get_db() as conn:
         c = conn.cursor()
-        c.execute("SELECT id, name, role, branch FROM users ORDER BY (role != '본부'), branch")
-        return c.fetchall()
+        c.execute("SELECT id, name, role, branch FROM users")
+        rows = c.fetchall()
+    # 본부 -> 중앙 -> 강북 -> ... -> 춘천고객지원팀 순서(DEFAULT_ACCOUNTS 배열 순서)를 그대로 따른다.
+    rows.sort(key=lambda r: _ACCOUNT_ORDER.get(r[0], len(_ACCOUNT_ORDER)))
+    return rows
 
 
 def get_user(user_id: str):
