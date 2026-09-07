@@ -34,7 +34,7 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
-from reportlab.graphics.shapes import Drawing, Line, String
+from reportlab.graphics.shapes import Drawing, Line, String, Rect
 
 # 한글 폰트는 배포 서버(OS)에 따라 설치 여부가 달라 시스템 폰트에 의존하면
 # 서버에서 글자가 깨진다(□□□). 리포지토리에 폰트 파일을 직접 포함해 어떤
@@ -184,6 +184,39 @@ class _SignatureOverlay(Flowable):
             c.drawImage(ImageReader(fitted), 0, 0, width=self.width, height=self.height, mask='auto')
 
 
+def _checkbox_glyph(x, y, box_size, checked):
+    """네모 체크박스 하나를 (x, y)를 왼쪽 아래 꼭짓점으로 그린다. 나눔고딕 폰트에는
+    ☑/☐/✓ 글자가 없어서(폰트 자체에 글자가 없음) 도형(사각형+체크선)으로 직접 그린다."""
+    shapes = [Rect(x, y, box_size, box_size, strokeColor=colors.black, strokeWidth=0.8, fillColor=colors.white)]
+    if checked:
+        shapes.append(Line(x + box_size * 0.18, y + box_size * 0.5,
+                            x + box_size * 0.42, y + box_size * 0.2,
+                            strokeColor=colors.black, strokeWidth=1.1))
+        shapes.append(Line(x + box_size * 0.42, y + box_size * 0.2,
+                            x + box_size * 0.85, y + box_size * 0.78,
+                            strokeColor=colors.black, strokeWidth=1.1))
+    return shapes
+
+
+def _result_checkbox_drawing(res_val, width=95, height=14):
+    """'적정'/'정비필요' 결과를 갈매기(체크) 표시가 있는 체크박스 2개로 그린다."""
+    d = Drawing(width, height)
+    box = 8
+    cy = (height - box) / 2
+
+    x1 = 3
+    for shape in _checkbox_glyph(x1, cy, box, res_val == "적정"):
+        d.add(shape)
+    d.add(String(x1 + box + 3, height / 2 - 3, "적정", fontName=FONT_NAME, fontSize=7.5))
+
+    x2 = width * 0.52
+    for shape in _checkbox_glyph(x2, cy, box, res_val != "적정"):
+        d.add(shape)
+    d.add(String(x2 + box + 3, height / 2 - 3, "정비필요", fontName=FONT_NAME, fontSize=7.5))
+
+    return d
+
+
 def _na_result_drawing(width=90, height=14):
     """'해당없음' 항목은 원본 양식처럼 결과란에 대각선을 그어 표시한다."""
     d = Drawing(width, height)
@@ -321,7 +354,7 @@ def _write_checklist_sheet(ws1, row_data):
                 result_cell.font = Font(name="맑은 고딕", size=9, color="595959", italic=True)
                 result_cell.fill = _NA_FILL
             else:
-                result_cell.value = "■ 적정   □ 정비필요" if res_val == "적정" else "□ 적정   ■ 정비필요"
+                result_cell.value = "☑ 적정   ☐ 정비필요" if res_val == "적정" else "☐ 적정   ☑ 정비필요"
                 result_cell.border = _THIN_BORDER
                 result_cell.font = Font(name="맑은 고딕", size=10)
             result_cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -534,8 +567,7 @@ def _build_vehicle_pdf_flowables(row_data, doc_width, doc_height, styles):
             elif is_na:
                 res_cell = _na_result_drawing()
             else:
-                res_txt = "■ 적정  □ 정비필요" if res_val == "적정" else "□ 적정  ■ 정비필요"
-                res_cell = Paragraph(res_txt, tbl_font_center)
+                res_cell = _result_checkbox_drawing(res_val)
 
             if is_na:
                 na_row_styles.append(('BACKGROUND', (1, cur_idx), (3, cur_idx), colors.Color(0.94, 0.94, 0.94)))
